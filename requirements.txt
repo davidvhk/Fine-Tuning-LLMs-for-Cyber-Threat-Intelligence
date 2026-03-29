@@ -8,3 +8,11 @@ accelerate==0.24.1
 wandb
 selenium
 beautifulsoup4
+pandas
+requests
+matplotlib
+seaborn
+tabulate
+webdriver-manager
+ipython
+duckduckgo-search

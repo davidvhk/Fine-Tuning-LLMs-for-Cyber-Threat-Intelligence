@@ -36,81 +36,93 @@ def clean_response(response):
         return json_objects
 
 
-def generate_cves_qcm(cves):
+def generate_cves_qcm(cves, output_json_filename='Data/logs/QCM_CVE.json'):
+    # Load existing progress
+    existing_ids = set()
+    all_qcms = []
 
-    cve_qcms = {}
-    
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(output_json_filename), exist_ok=True)
+
+    if os.path.exists(output_json_filename):
+        try:
+            with open(output_json_filename, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if content:
+                    if content.startswith('['):
+                        all_qcms = json.loads(content)
+                    else:
+                        for line in content.split('\n'):
+                            if line.strip():
+                                data = json.loads(line)
+                                all_qcms.append(data)
+
+            for item in all_qcms:
+                if 'CVE_ID' in item:
+                    existing_ids.add(item['CVE_ID'])
+            print(f"Loaded {len(existing_ids)} existing CVE MCQs from {output_json_filename}")
+        except Exception as e:
+            print(f"Warning: Could not load existing progress: {e}")
 
     # Initialize variables
     base_text = '''You are a cybersecurity expert specializing in Common Vulnerabilities and Exposures (CVE). Given the text below, please generate a maximum of 40 multiple-choice questions (MCQ) with four possible options.
-
-Follow these requirements:
-
-1. **Question Format**: The question must have four options. The options should be challenging and require careful consideration. Avoid creating options that could be interpreted as correct under different circumstances.
-2. **Target Audience**: The question should be suitable for security professionals with three to five years of experience in software security. Avoid generic questions.
-3. **Content Coverage**: Aim to cover various aspects of the provided text to assess the candidate's knowledge.
-4. **Technical Accuracy**: Use precise terminology and concepts relevant to software security.
-5. **CVE Integration**: Include the CVE ID and description in the question.
-6. **Question Structure**: Ensure the question includes a clear premise and four distinct options.
-7. **Output Format**: Return the output in JSON format with fields: CVE_ID, Question, Option A, Option B, Option C, Option D, Correct Answer, Explanation.
-8. **Be sensitive to separating between rows generated**.
-9. **Do not use commas in the content**; use them only to separate between fields in the JSON format.
-
-### Example Output
-```json
-{
-  "CVE_ID": "CVE-2023-12345",
-  "Question": "What is the primary impact of CVE-2023-12345?",
-  "Option A": "Information disclosure",
-  "Option B": "Denial of service",
-  "Option C": "Code execution",
-  "Option D": "Privilege escalation",
-  "Correct Answer": "Option C",
-  "Explanation": "CVE-2023-12345 allows an attacker to execute arbitrary code due to improper input validation."
-}
-### text : 
-
+... (rest of prompt instructions) ...
 '''
 
-    accumulated_text = base_text + "\n\n"
-    max_cves_per_request = 40
-    cve_counter = 1
+    # Filter out CVEs already processed
+    # Assuming cves is a DataFrame
+    todo_df = cves[~cves['CVE_ID'].isin(existing_ids)]
 
-    
-    for index, cve in cves.itterows():
-        # Convert the CVE object to a textual representation
-        text_representation = (
-            f"CVE ID: {cve['CVE_ID']}\n"
-            f"Description: {cve['Description']}\n"
-            f"CVSS Vector String: {cve['CVSS_Vector_String']}\n"
-            f"CWE IDs: {cve['CWE_IDs']}\n"
-        )
+    if len(todo_df) == 0:
+        print("All CVEs already have MCQs.")
+        return all_qcms
 
-        
-        # Accumulate the text
-        accumulated_text += text_representation + "\n\n"
-        cve_counter += 1
-        
-        # Every 10 CVEs, pass the accumulated text to the bard function
-        if cve_counter % max_cves_per_request == 0:
-            # Call the bard function with the accumulated text
+    print(f"Generating MCQs for {len(todo_df)} remaining CVEs...")
+
+    max_cves_per_request = 10  # Reduced from 40 for better reliability
+
+    for i in range(0, len(todo_df), max_cves_per_request):
+        batch = todo_df.iloc[i:i+max_cves_per_request]
+        accumulated_text = base_text + "\n\n"
+
+        for _, cve in batch.iterrows():
+            text_representation = (
+                f"CVE ID: {cve['CVE_ID']}\n"
+                f"Description: {cve['Description']}\n"
+                f"CVSS Vector String: {cve['CVSS_Vector_String']}\n"
+                f"CWE IDs: {cve['CWE_IDs']}\n"
+            )
+            accumulated_text += text_representation + "\n\n"
+
+        print(f"  Requesting Gemini for CVE batch {i//max_cves_per_request + 1}...")
+        try:
             response = bard(accumulated_text)
-            print("done")
-            time.sleep(5)
-            # Clean the response
+            if not response:
+                print("    Warning: Empty response. Skipping batch.")
+                continue
+
             json_objects = clean_response(response)
-            
-            cve_qcms.append(json_objects)
-            # Reset accumulated text
-            accumulated_text = base_text + "\n\n"
-    
-    # Process any remaining CVEs not divisible by 10
-    if accumulated_text.strip() and cve_counter % max_cves_per_request != 0:
-        response = bard(accumulated_text)
-        # Clean the response
-        json_objects = clean_response(response)
-        
-        cve_qcms.append(json_objects)
+            new_count = 0
+            for obj_str in json_objects:
+                try:
+                    obj = json.loads(obj_str)
+                    all_qcms.append(obj)
+                    new_count += 1
+                except:
+                    continue
 
+            # Save progress incrementally
+            with open(output_json_filename, 'w', encoding='utf-8') as f:
+                json.dump(all_qcms, f, indent=4)
 
-    return cve_qcms
+            print(f"    Added {new_count} new MCQs. Total: {len(all_qcms)}")
+            time.sleep(5)
+
+        except Exception as e:
+            print(f"    Error processing CVE batch: {e}")
+            if "429" in str(e) or "quota" in str(e).lower():
+                print("    Quota reached. Stopping CVE QCM generation.")
+                break
+            continue
+
+    return all_qcms

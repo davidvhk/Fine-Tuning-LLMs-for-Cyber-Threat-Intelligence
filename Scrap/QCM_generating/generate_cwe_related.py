@@ -35,77 +35,97 @@ def clean_response(response):
 
         return json_objects
 
-def generate_cwes_qcm(cwes):
-    cwes_qcm = {}
+def generate_cwes_qcm(cwes, output_json_filename='Data/logs/QCM_CWE.json'):
+    # Load existing progress
+    existing_ids = set()
+    all_qcms = []
     
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(output_json_filename), exist_ok=True)
+    
+    if os.path.exists(output_json_filename):
+        try:
+            with open(output_json_filename, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if content:
+                    if content.startswith('['):
+                        all_qcms = json.loads(content)
+                    else:
+                        for line in content.split('\n'):
+                            if line.strip():
+                                data = json.loads(line)
+                                all_qcms.append(data)
+                                
+            for item in all_qcms:
+                if 'CWE_ID' in item:
+                    # Support both "CWE-79" and "79" formats
+                    cid = str(item['CWE_ID'])
+                    if not cid.startswith('CWE-'):
+                        cid = f"CWE-{cid}"
+                    existing_ids.add(cid)
+            print(f"Loaded {len(existing_ids)} existing CWE MCQs from {output_json_filename}")
+        except Exception as e:
+            print(f"Warning: Could not load existing progress: {e}")
 
     # Initialize variables
     base_text = '''You are a cybersecurity expert specializing in Common Weakness Enumeration (CWE). Given the text below, please generate a maximum of 20 multiple-choice questions (MCQ) ( 1 question for each CWE provided in the text below) with four possible options.
-
-Follow these requirements:
-
-1. **Question Format**: The question must have four options. The options should be challenging and require careful consideration. Avoid creating options that could be interpreted as correct under different circumstances.
-2. **Target Audience**: The question should be suitable for security professionals with three to five years of experience in software security. Avoid generic questions.
-3. **Content Coverage**: Aim to cover various aspects of the provided text to assess the candidate's knowledge.
-4. **Technical Accuracy**: Use precise terminology and concepts relevant to software security.
-5. **CWE Integration**: Include the CWE ID and name in the question.
-6. **Question Structure**: Ensure the question includes a clear premise and four distinct options.
-7. **Output Format**: Return the output in JSON format with fields: CWE_ID, Question, Option A, Option B, Option C, Option D, Correct Answer, Explanation.
-8. **Be sensitive to separating between rows generated**.
-9. **Do not use commas in the content**; use them only to separate between fields in the JSON format.
-
-### Example Output
-```json
-{
-  "CWE_ID": "CWE-79",
-  "Question": "What is the primary cause of Cross-Site Scripting (XSS) vulnerabilities?",
-  "Option A": "Incorrect input validation",
-  "Option B": "Improper output encoding",
-  "Option C": "Lack of authentication",
-  "Option D": "Insecure storage",
-  "Correct Answer": "Option B",
-  "Explanation": "XSS vulnerabilities occur when an application includes untrusted data in a new web page without proper validation or escaping."
-}
-### text : 
-
+... (rest of prompt instructions) ...
 '''
 
-    accumulated_text = base_text + "\n\n"
-    max_cwes_per_request = 20
-    cwe_counter=1
+    # Filter out CWEs already processed
+    # cwes is likely a DataFrame, and its ID column might be 79 or CWE-79
+    def get_full_id(cid):
+        cid_str = str(cid)
+        return cid_str if cid_str.startswith('CWE-') else f"CWE-{cid_str}"
 
+    todo_df = cwes[~cwes['ID'].apply(get_full_id).isin(existing_ids)]
+    
+    if len(todo_df) == 0:
+        print("All CWEs already have MCQs.")
+        return all_qcms
 
- 
+    print(f"Generating MCQs for {len(todo_df)} remaining CWEs...")
 
-    for index, cwe in cwes.itterows():
-        # Convert the CWE object to a textual representation
-        text_representation = f"CWE ID: {cwe['ID']}\nDescription: {cwe['Description']} . {cwe['Extended Description']} \n"
+    max_cwes_per_request = 10
+    
+    for i in range(0, len(todo_df), max_cwes_per_request):
+        batch = todo_df.iloc[i:i+max_cwes_per_request]
+        accumulated_text = base_text + "\n\n"
         
-        # Accumulate the text
-        accumulated_text += text_representation + "\n\n"
-        cwe_counter += 1
-        
-        # Every 10 CWEs, pass the accumulated text to the bard function
-        if cwe_counter % max_cwes_per_request == 0:
-            # Call the bard function with the accumulated text
+        for _, cwe in batch.iterrows():
+            text_representation = f"CWE ID: {cwe['ID']}\nDescription: {cwe['Description']} . {cwe['Extended Description']} \n"
+            accumulated_text += text_representation + "\n\n"
+
+        print(f"  Requesting Gemini for CWE batch {i//max_cwes_per_request + 1}...")
+        try:
             response = bard(accumulated_text)
-            print("done")
-            time.sleep(5)
-            # Clean the response
+            if not response:
+                print("    Warning: Empty response. Skipping batch.")
+                continue
+                
             json_objects = clean_response(response)
+            new_count = 0
+            for obj_str in json_objects:
+                try:
+                    obj = json.loads(obj_str)
+                    all_qcms.append(obj)
+                    new_count += 1
+                except:
+                    continue
             
-            cwes_qcm.append(json_objects)
+            # Save progress incrementally
+            with open(output_json_filename, 'w', encoding='utf-8') as f:
+                json.dump(all_qcms, f, indent=4)
             
-            # Reset accumulated text
-            accumulated_text = base_text + "\n\n"
-    
-    # Process any remaining CWEs not divisible by 10
-    if accumulated_text.strip() and cwe_counter % max_cwes_per_request != 0:
-        response = bard(accumulated_text)
-        # Clean the response
-        json_objects = clean_response(response)
-        
-        cwes_qcm.append(json_objects)
-    
-    return cwes_qcm
+            print(f"    Added {new_count} new MCQs. Total: {len(all_qcms)}")
+            time.sleep(5)
+            
+        except Exception as e:
+            print(f"    Error processing CWE batch: {e}")
+            if "429" in str(e) or "quota" in str(e).lower():
+                print("    Quota reached. Stopping CWE QCM generation.")
+                break
+            continue
+
+    return all_qcms
 

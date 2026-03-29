@@ -1,44 +1,59 @@
-import pandas as pd
 import requests
-from bs4 import BeautifulSoup
 import csv
 import os
+import time
+from datetime import datetime, timedelta
 
-def get_cve_links(url):
+def get_cve_links(start_index=0, results_per_page=1000, api_key=None, start_date=None, end_date=None):
     """
-    Fetches the CVE links from a given page URL.
-
-    Args:
-        url (str): The URL of the page to scrape.
-
-    Returns:
-        list: A list of dictionaries containing CVE IDs and their URLs.
+    Fetches CVE IDs from the NVD API 2.0 within a specific date range.
     """
-    headers = {
-        "User-Agent": "MyPythonScraper via requests lib (contact: faroukdaboussi2009@gmail.com)"
+    url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    params = {
+        "resultsPerPage": results_per_page,
+        "startIndex": start_index
     }
     
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()  # Raise an exception for HTTP errors
-    soup = BeautifulSoup(response.content, 'html.parser')
+    if start_date and end_date:
+        params["pubStartDate"] = start_date
+        params["pubEndDate"] = end_date
 
+    headers = {
+        "User-Agent": "MyPythonScraper (contact: faroukdaboussi2009@gmail.com)"
+    }
+    if api_key:
+        headers['apiKey'] = api_key
+
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=60)
+        if response.status_code == 403:
+            print(f"Rate limited or forbidden. Sleeping 30s...")
+            time.sleep(30)
+            response = requests.get(url, headers=headers, params=params, timeout=60)
+        
+        if response.status_code != 200:
+            print(f"Error {response.status_code}: {response.reason}")
+            if 'message' in response.headers:
+                print(f"API Message: {response.headers['message']}")
+            return [], 0
+            
+        data = response.json()
+    except Exception as e:
+        print(f"Error fetching data at index {start_index}: {e}")
+        return [], 0
+
+    total_results = data.get('totalResults', 0)
     cve_links = []
-    for a_tag in soup.find_all('a', attrs={'data-testid': lambda x: x and x.startswith('vuln-detail-link-')}):
-        cve_id = a_tag.text.strip()
-        cve_url = f"https://nvd.nist.gov{a_tag.get('href')}"
+    for vuln in data.get('vulnerabilities', []):
+        cve_id = vuln['cve']['id']
+        cve_url = f"https://nvd.nist.gov/vuln/detail/{cve_id}"
         cve_links.append({'CVE ID': cve_id, 'URL': cve_url})
     
-    return cve_links
+    return cve_links, total_results
 
 def count_csv_rows(file_path):
     """
     Counts the number of rows in the CSV file excluding the header.
-
-    Args:
-        file_path (str): The path to the CSV file.
-
-    Returns:
-        int: The number of rows in the CSV file.
     """
     if not os.path.exists(file_path):
         return 0
@@ -46,47 +61,107 @@ def count_csv_rows(file_path):
     with open(file_path, 'r', newline='', encoding='utf-8') as csvfile:
         reader = csv.reader(csvfile)
         row_count = sum(1 for row in reader)
-        return row_count - 1  # Subtract the header row
+        return max(0, row_count - 1)
 
-def scrape_all_cve_links(output_file='cve_links.csv'):
+def scrape_all_cve_links(output_file='Data/logs/cve_links.csv', api_key=None, start_year=None, overwrite=False):
     """
-    Scrapes CVE links from all paginated pages and writes them to a CSV file in batches of 1000 rows.
-
-    Args:
-        output_file (str, optional): The filename to use for the CSV output. Defaults to 'cve_links.csv'.
+    Fetches all CVE links using the NVD API and writes them to a CSV file.
     """
-    base_url = "https://nvd.nist.gov/vuln/search/results?isCpeNameSearch=false&cvss_version=3&results_type=overview&form_type=Advanced&search_type=all&startIndex="
-    increment = 20
-    max_index = 154920  # Replace this with the actual max index if known
-    batch_size = 1000
-
-    # Determine the starting point by counting existing rows in the CSV file
-    existing_rows = count_csv_rows(output_file)
-    start_index = (existing_rows + 1) if existing_rows > 0 else 1
+    results_per_page = 1000
+    fieldnames = ['CVE ID', 'URL']
     
-    print(f"Starting at index: {start_index}")
+    if start_year:
+        # Range-based download
+        current_date = datetime(start_year, 1, 1)
+        end_of_time = datetime.now()
+        
+        # Load existing IDs to avoid duplicates unless overwriting
+        existing_ids = set()
+        file_exists = os.path.exists(output_file) and os.path.getsize(output_file) > 0
+        if file_exists and not overwrite:
+            with open(output_file, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                next(reader, None) # Skip header
+                existing_ids = {row[0] for row in reader if row}
+            print(f"Resuming: {len(existing_ids)} links already in {output_file}")
+        else:
+            mode = 'w'
+            if overwrite:
+                print(f"Overwrite enabled: Clearing {output_file} and starting fresh.")
+            with open(output_file, mode, newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
 
-    all_cve_links = []
+        while current_date < end_of_time:
+            window_end = current_date + timedelta(days=110)
+            if window_end > end_of_time:
+                window_end = end_of_time
+            
+            s_str = current_date.strftime("%Y-%m-%dT00:00:00.000Z")
+            e_str = window_end.strftime("%Y-%m-%dT23:59:59.999Z")
+            
+            print(f"Fetching range: {s_str} to {e_str}")
+            
+            range_index = 0
+            range_total = 1 
+            
+            while range_index < range_total:
+                batch, range_total = get_cve_links(range_index, results_per_page, api_key, s_str, e_str)
+                if batch:
+                    # Filter out IDs we already have
+                    new_links = [link for link in batch if link['CVE ID'] not in existing_ids]
+                    if new_links:
+                        with open(output_file, 'a', newline='', encoding='utf-8') as csvfile:
+                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                            writer.writerows(new_links)
+                        # Add new IDs to our set to prevent duplicates within the same run
+                        for link in new_links:
+                            existing_ids.add(link['CVE ID'])
+                        print(f"  Added {len(new_links)} new links to file.")
+                    
+                    range_index += len(batch)
+                    print(f"  Progress in range: {range_index} / {range_total}")
+                else:
+                    if range_total == 0: break
+                    print("  Error in batch, retrying...")
+                    time.sleep(10)
+                
+                delay = 0.61 if api_key else 6.1
+                time.sleep(delay)
+            
+            current_date = window_end + timedelta(seconds=1)
+    else:
+        # Full download (legacy)
+        existing_rows = count_csv_rows(output_file)
+        start_index = existing_rows
+        print(f"Starting full fetch at index: {start_index}")
+        
+        first_batch, total_results = get_cve_links(start_index, results_per_page, api_key)
+        if not first_batch and total_results == 0:
+             return output_file
 
-    while start_index <= max_index:
-        print(f"Fetching page starting at index: {start_index}")
-        url = f"{base_url}{start_index}"
-        page_cve_links = get_cve_links(url)
-        all_cve_links.extend(page_cve_links)
-        start_index += increment
+        file_exists = os.path.exists(output_file) and os.path.getsize(output_file) > 0
+        with open(output_file, 'a', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerows(first_batch)
+        
+        current_index = start_index + len(first_batch)
+        while current_index < total_results:
+            delay = 0.61 if api_key else 6.1
+            time.sleep(delay)
+            print(f"Fetching CVEs starting at index: {current_index} / {total_results}")
+            batch, _ = get_cve_links(current_index, results_per_page, api_key)
+            if batch:
+                with open(output_file, 'a', newline='', encoding='utf-8') as csvfile:
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writerows(batch)
+                current_index += len(batch)
+            else:
+                time.sleep(10)
 
-        # Write in batches of 1000 rows
-        if len(all_cve_links) >= batch_size:
-            with open(output_file, 'a', newline='', encoding='utf-8') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=['CVE ID', 'URL'])
-                if existing_rows == 0:
-                    writer.writeheader()
-                writer.writerows(all_cve_links[:batch_size])
-                all_cve_links = all_cve_links[batch_size:]  # Keep the remaining part for the next batch
-                existing_rows += batch_size
-                print(f"Written {existing_rows} rows to {output_file}")
+    return output_file
 
-    df = pd.DataFrame(all_cve_links, columns=['CVE ID', 'URL'])
-
-    return df
-
+if __name__ == "__main__":
+    pass

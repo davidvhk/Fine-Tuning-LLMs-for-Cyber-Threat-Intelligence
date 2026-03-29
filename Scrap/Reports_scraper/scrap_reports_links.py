@@ -2,111 +2,142 @@ import json
 import csv
 import re
 import time
-
 import requests
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-def get_existing_groups(intrusion_sets='ATT&AK/intrusion_sets.json'):
-    # Load the JSON data
+import os
+import random
+from Models.GeminiApi import bard
+from googlesearch import search
+
+def get_existing_groups(intrusion_sets='Data/intrusion_sets.json'):
+    if not os.path.exists(intrusion_sets):
+        print(f"Warning: {intrusion_sets} not found.")
+        return []
+
     with open(intrusion_sets, 'r') as json_file:
         data = json.load(json_file)
 
-    # Extract the required attributes
     extracted_data = []
     for item in data:
-        intrusion_set_name = item.get('Intrusion Set Name')
-        external_id = item.get('External ID')
-        if intrusion_set_name and external_id:
-            extracted_data.append({'group_id': external_id, 'group_name': intrusion_set_name, 'links': ''})
+        name = item.get('Intrusion Set Name')
+        ext_id = item.get('External ID')
+        if name and ext_id:
+            extracted_data.append({'group_id': ext_id, 'group_name': name, 'links': '', 'aliases': ''})
     return extracted_data
 
-# Function to transform a name
-def transform_name(name):
-    return name.replace(' ', '+')
-
-def fetch_page_content_with_selenium(url):
-    chrome_options = webdriver.ChromeOptions()
-    chrome = webdriver.Chrome(options=chrome_options)
-    time.sleep(5)
-    chrome.get(url)
-    page_source = chrome.page_source
-    chrome.quit()  # Use quit() instead of close() to ensure the driver is properly closed
-    return page_source
-
-# Function to get and filter links from Google News search
-def get_filtered_links_from_google_news(transformed_name, sleep_time):
-    url = f"https://www.google.fr/search?q=threat-attack+%22{transformed_name}%22+report&tbm=nws"
-    print(f"Fetching URL: {url}")  # Debugging line
-    chrome_options = webdriver.ChromeOptions()
-    chrome = webdriver.Chrome(options=chrome_options)
-    time.sleep(3)
-    chrome.get(url)
-    time.sleep(sleep_time)
-    page_content = chrome.page_source
+def get_links_via_search(group_name, max_results=5):
+    """
+    Uses Google Search to find high-quality threat report URLs for a group.
+    """
+    print(f"Searching Google for: {group_name}...")
     
+    reputable_domains = [
+        'mandiant.com', 'crowdstrike.com', 'securelist.com', 'kaspersky.com', 
+        'unit42.paloaltonetworks.com', 'microsoft.com', 'cisa.gov', 
+        'welivesecurity.com', 'checkpoint.com', 'talosintelligence.com',
+        'sentinelone.com', 'symantec-enterprise-blogs.security.com',
+        'zscaler.com', 'proofpoint.com', 'recordedfuture.com', 'trendmicro.com'
+    ]
     
-    # Define a regex pattern to find links that start with "https://www." and end with "&"
-    pattern = r'https://www\.(?!google)[^\s"&]+&'
-
-    # Find all links matching the pattern
-    all_links = re.findall(pattern, page_content)
+    query = f'"{group_name}" threat report technical analysis'
+    urls = []
     
-    # Remove trailing "&" from each link
-    filtered_links = [link.rstrip('&') for link in all_links]
-    
-    print(f"Found {len(filtered_links)} filtered links")  # Debugging line
+    try:
+        # Perform Google search
+        # num_results=10 to get a good sample, then we filter
+        search_results = search(query, num_results=15, lang="en")
+        
+        for url in search_results:
+            if not url or not url.startswith('http'):
+                continue
+            
+            # Filter out noise and social media
+            noise = ["/groups/", "/tags/", "/search?", "twitter.com", "facebook.com", "linkedin.com", "youtube.com"]
+            if any(x in url.lower() for x in noise):
+                continue
+                
+            # Prioritize reputable domains
+            is_reputable = any(domain in url.lower() for domain in reputable_domains)
+            
+            if url not in urls:
+                if is_reputable:
+                    urls.insert(0, url) # Put top sources at the beginning
+                else:
+                    urls.append(url)
+        
+        # Limit to requested count
+        final_urls = urls[:max_results]
+        print(f"  Found {len(final_urls)} technical URLs.")
+        return final_urls
+            
+    except Exception as e:
+        print(f"  Google Search Error for {group_name}: {e}")
+        return []
 
-    return filtered_links
-
-# Function to save data to CSV
 def save_to_csv(data, file_path):
-    with open(file_path, 'w', newline='') as csv_file:
-        fieldnames = ['group_id', 'group_name', 'links']
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, 'w', newline='', encoding='utf-8') as csv_file:
+        fieldnames = ['group_id', 'group_name', 'aliases', 'links']
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(data)
+        for row in data:
+            links_val = row.get('links', '')
+            if isinstance(links_val, list):
+                links_val = ', '.join(links_val)
+            
+            writer.writerow({
+                'group_id': row.get('group_id', ''),
+                'group_name': row.get('group_name', ''),
+                'aliases': row.get('aliases', ''),
+                'links': links_val
+            })
 
-# Load existing CSV to find the starting index
-def load_existing_csv(file_path):
-    existing_data = []
-    try:
-        with open(file_path, 'r', newline='') as csv_file:
-            reader = csv.DictReader(csv_file)
-            existing_data = list(reader)
-    except FileNotFoundError:
-        # CSV file does not exist
-        pass
-    return existing_data
-def scrap_reports_links(extracted_data,csv_file_path = 'reports_links.csv'):
-
-
-    chrome_options = webdriver.ChromeOptions()
-    chrome = webdriver.Chrome(options=chrome_options)
-    # Load existing data and find the starting index
-    existing_data = load_existing_csv(csv_file_path)
-    existing_ids = set(row['group_id'] for row in existing_data)
-    start_index = len(existing_data)
-
-    # Process each row and get links
-    sleep_time = 20
-    for i, item in enumerate(extracted_data):
-        if item['group_id'] in existing_ids:
-            # Skip if already processed
-            continue
-
-        transformed_name = transform_name(item['group_name'])
-        print(f"Processing name: {item['group_name']} (Transformed: {transformed_name})")  # Debugging line
-        links = get_filtered_links_from_google_news(transformed_name, sleep_time)
-        sleep_time = 5
-        item['links'] = ', '.join(links)  # Join links with a comma
-        
-        # Save every 5 rows
-        if (i + 1) % 5 == 0 or i + 1 == len(extracted_data):
-            save_to_csv(existing_data + extracted_data[:i + 1], csv_file_path)
-    chrome.quit()
-    print(f"Data has been successfully saved to {csv_file_path}")
+def scrap_reports_links(extracted_data, csv_file_path='Data/logs/reports_links.csv'):
+    # Load existing progress
+    results = []
+    if os.path.exists(csv_file_path):
+        try:
+            with open(csv_file_path, 'r', newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                results = list(reader)
+                
+            valid_results = [r for r in results if r.get('links') and 'http' in str(r.get('links'))]
+            print(f"Loaded {len(valid_results)} valid group links from cache.")
+            
+            existing_ids = {str(row['group_id']).strip() for row in valid_results}
+            results = valid_results 
+        except Exception as e:
+            print(f"Warning: Error reading cache {csv_file_path}: {e}")
+            results = []
+            existing_ids = set()
+    else:
+        existing_ids = set()
+            
+    todo = [item for item in extracted_data if str(item['group_id']).strip() not in existing_ids]
     
+    if not todo:
+        print("All report links already discovered.")
+        return
+
+    print(f"Discovering links for {len(todo)} remaining groups using Google Search...")
+    
+    for item in todo:
+        group_name = item['group_name']
+        
+        # Use Google Search for real URLs
+        report_urls = get_links_via_search(group_name)
+        
+        if report_urls:
+            item['links'] = ', '.join(report_urls)
+            results.append(item)
+            save_to_csv(results, csv_file_path)
+            print(f"  [OK] Saved links for {group_name}.")
+        else:
+            print(f"  [FAIL] No links found for {group_name}.")
+        
+        # CRITICAL: Sleep between requests to avoid Google blocking (429)
+        # Random delay between 10 and 20 seconds for Google
+        delay = random.uniform(10, 20)
+        print(f"  Sleeping {delay:.1f}s to respect search engine limits...")
+        time.sleep(delay)
+        
+    print(f"Reports links discovery complete. Results saved to {csv_file_path}")
