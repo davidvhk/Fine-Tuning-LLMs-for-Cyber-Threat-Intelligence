@@ -5,8 +5,8 @@ import time
 import requests
 import os
 import random
-from Models.GeminiApi import bard
-from googlesearch import search
+from bs4 import BeautifulSoup
+from ddgs import DDGS
 
 def get_existing_groups(intrusion_sets='Data/intrusion_sets.json'):
     if not os.path.exists(intrusion_sets):
@@ -24,54 +24,81 @@ def get_existing_groups(intrusion_sets='Data/intrusion_sets.json'):
             extracted_data.append({'group_id': ext_id, 'group_name': name, 'links': '', 'aliases': ''})
     return extracted_data
 
-def get_links_via_search(group_name, max_results=5):
+def get_links_via_ddg_lib(group_name, max_results=10):
     """
-    Uses Google Search to find high-quality threat report URLs for a group.
+    Uses the DDGS library to find high-quality technical threat report URLs.
+    Implements a robust multi-query strategy with refined technical keywords.
     """
-    print(f"Searching Google for: {group_name}...")
+    print(f"Searching for: {group_name}...")
     
     reputable_domains = [
         'mandiant.com', 'crowdstrike.com', 'securelist.com', 'kaspersky.com', 
         'unit42.paloaltonetworks.com', 'microsoft.com', 'cisa.gov', 
         'welivesecurity.com', 'checkpoint.com', 'talosintelligence.com',
-        'sentinelone.com', 'symantec-enterprise-blogs.security.com',
-        'zscaler.com', 'proofpoint.com', 'recordedfuture.com', 'trendmicro.com'
+        'sentinelone.com', 'symantec.com', 'zscaler.com', 'proofpoint.com', 
+        'recordedfuture.com', 'trendmicro.com', 'fireeye.com', 'intezer.com'
     ]
     
-    query = f'"{group_name}" threat report technical analysis'
-    urls = []
+    # Refined search queries for maximum technical depth
+    queries = [
+        f'"{group_name}" technical analysis report IOCs TTPs',
+        f'"{group_name}" MITRE ATT&CK techniques analysis',
+        f'site:mandiant.com OR site:kaspersky.com "{group_name}" analysis',
+        f'"{group_name}" malware analysis whitepaper'
+    ]
     
+    found_urls = []
     try:
-        # Perform Google search
-        # num_results=10 to get a good sample, then we filter
-        search_results = search(query, num_results=15, lang="en")
-        
-        for url in search_results:
-            if not url or not url.startswith('http'):
-                continue
-            
-            # Filter out noise and social media
-            noise = ["/groups/", "/tags/", "/search?", "twitter.com", "facebook.com", "linkedin.com", "youtube.com"]
-            if any(x in url.lower() for x in noise):
-                continue
+        with DDGS() as ddgs:
+            for query in queries:
+                print(f"  Attempting query: {query}")
+                try:
+                    # Search using text() without timelimit to find the best historical reports
+                    ddgs_gen = ddgs.text(query, region='wt-wt', safesearch='off')
+                    count = 0
+                    for r in ddgs_gen:
+                        href = r['href']
+                        
+                        # Filter for noise
+                        noise = ["/groups/", "/tags/", "/search?", "twitter.com", "facebook.com", "linkedin.com", "youtube.com", "instagram.com", "reddit.com", "github.com", "wikipedia.org"]
+                        if any(x in href.lower() for x in noise):
+                            continue
+                        
+                        if href not in found_urls:
+                            found_urls.append(href)
+                            count += 1
+                        
+                        if count >= 4: # Stop after 4 hits per query to keep diversity
+                            break
+                            
+                    if len(found_urls) >= max_results:
+                        break
+                        
+                except Exception as query_e:
+                    print(f"    Query failure: {query_e}")
+                    continue
                 
-            # Prioritize reputable domains
-            is_reputable = any(domain in url.lower() for domain in reputable_domains)
-            
-            if url not in urls:
-                if is_reputable:
-                    urls.insert(0, url) # Put top sources at the beginning
-                else:
-                    urls.append(url)
-        
-        # Limit to requested count
-        final_urls = urls[:max_results]
-        print(f"  Found {len(final_urls)} technical URLs.")
-        return final_urls
-            
+                # Small delay between queries for the same group to avoid rate-limiting
+                time.sleep(random.uniform(2, 4))
+                    
     except Exception as e:
-        print(f"  Google Search Error for {group_name}: {e}")
-        return []
+        print(f"  Critical search error with library: {e}")
+
+    # Prioritize reputable sources
+    reputable_hits = []
+    other_hits = []
+    
+    for u in found_urls:
+        if any(domain in u.lower() for domain in reputable_domains):
+            reputable_hits.append(u)
+        else:
+            other_hits.append(u)
+            
+    final_urls = (reputable_hits + other_hits)[:max_results]
+    print(f"  [FOUND] {len(final_urls)} technical URLs for {group_name}")
+    for u in final_urls:
+        print(f"    - {u}")
+    return final_urls
 
 def save_to_csv(data, file_path):
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -91,10 +118,14 @@ def save_to_csv(data, file_path):
                 'links': links_val
             })
 
-def scrap_reports_links(extracted_data, csv_file_path='Data/logs/reports_links.csv'):
-    # Load existing progress
+def scrap_reports_links(extracted_data, csv_file_path='Data/logs/reports_links.csv', force_refresh=False):
+    """
+    Main entry point for report link discovery.
+    """
     results = []
-    if os.path.exists(csv_file_path):
+    existing_ids = set()
+    
+    if not force_refresh and os.path.exists(csv_file_path):
         try:
             with open(csv_file_path, 'r', newline='', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
@@ -102,15 +133,12 @@ def scrap_reports_links(extracted_data, csv_file_path='Data/logs/reports_links.c
                 
             valid_results = [r for r in results if r.get('links') and 'http' in str(r.get('links'))]
             print(f"Loaded {len(valid_results)} valid group links from cache.")
-            
             existing_ids = {str(row['group_id']).strip() for row in valid_results}
             results = valid_results 
         except Exception as e:
             print(f"Warning: Error reading cache {csv_file_path}: {e}")
             results = []
             existing_ids = set()
-    else:
-        existing_ids = set()
             
     todo = [item for item in extracted_data if str(item['group_id']).strip() not in existing_ids]
     
@@ -118,26 +146,24 @@ def scrap_reports_links(extracted_data, csv_file_path='Data/logs/reports_links.c
         print("All report links already discovered.")
         return
 
-    print(f"Discovering links for {len(todo)} remaining groups using Google Search...")
+    print(f"Discovering high-signal technical links for {len(todo)} groups using DDGS...")
     
     for item in todo:
         group_name = item['group_name']
-        
-        # Use Google Search for real URLs
-        report_urls = get_links_via_search(group_name)
+        report_urls = get_links_via_ddg_lib(group_name)
         
         if report_urls:
             item['links'] = ', '.join(report_urls)
+            # Filter results list for updating
+            results = [r for r in results if r['group_id'] != item['group_id']]
             results.append(item)
             save_to_csv(results, csv_file_path)
-            print(f"  [OK] Saved links for {group_name}.")
+            print(f"  [OK] Saved technical links for {group_name}.")
         else:
-            print(f"  [FAIL] No links found for {group_name}.")
+            print(f"  [FAIL] No technical links found for {group_name}.")
         
-        # CRITICAL: Sleep between requests to avoid Google blocking (429)
-        # Random delay between 10 and 20 seconds for Google
-        delay = random.uniform(10, 20)
-        print(f"  Sleeping {delay:.1f}s to respect search engine limits...")
+        # Consistent pacing to respect rate limits
+        delay = random.uniform(7, 12)
         time.sleep(delay)
         
     print(f"Reports links discovery complete. Results saved to {csv_file_path}")

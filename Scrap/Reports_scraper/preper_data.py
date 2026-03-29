@@ -4,18 +4,37 @@ import re
 
 import pandas as pd
 
-def get_first_second_name(df, group_name):
+def get_group_aliases(df, group_name):
     # Filter the DataFrame based on the specified group_name
     filtered_df = df[df['group_name'] == group_name]
     
-    # Return the first 'second_name' value if it exists, otherwise None
-    if not filtered_df.empty:
-        return filtered_df['second_name'].iloc[0]
+    # Return the 'aliases' value if it exists, otherwise None
+    if not filtered_df.empty and 'aliases' in filtered_df.columns:
+        aliases = filtered_df['aliases'].iloc[0]
+        if pd.isna(aliases):
+            return None
+        return str(aliases)
     return None
-def transform_rapport(rapport, group_name, second_name):
-    # Replace occurrences of group_name and second_name with [PLACEHOLDER]
-    trans_rapport = rapport.replace(group_name, '[PLACEHOLDER]')
-    trans_rapport = trans_rapport.replace(second_name, '[PLACEHOLDER]')
+
+def transform_rapport(rapport, group_name, aliases_str):
+    # Replace occurrences of group_name and aliases with [PLACEHOLDER]
+    trans_rapport = rapport
+    
+    # Names to mask
+    names_to_mask = [group_name]
+    if aliases_str:
+        aliases = [a.strip() for a in str(aliases_str).split(',') if a.strip()]
+        names_to_mask.extend(aliases)
+    
+    # Sort by length descending to avoid partial matches
+    names_to_mask = sorted([n for n in names_to_mask if len(n) > 2], key=len, reverse=True)
+    
+    for name in names_to_mask:
+        # Use regex for case-insensitive replacement with word boundaries if possible
+        # However, for simplicity and compatibility with existing logic:
+        pattern = re.compile(re.escape(name), re.IGNORECASE)
+        trans_rapport = pattern.sub('[PLACEHOLDER]', trans_rapport)
+        
     return trans_rapport
 # Function to unescape JSON string
 def unescape_json_string(s):
@@ -117,10 +136,22 @@ def remove_rows_with_missing_values(input_tsv_filename, output_tsv_filename):
 
 def preper_report_to_tsv(reports_json,cleaned_reports_tsv,reports_links_csv) :
     reports_links_csv = pd.read_csv(reports_links_csv)
-    # Open and read the JSON file
+    # Open and read the JSON file (supporting JSONL format)
     reports_tsv = 'temp_reports_tsv.tsv'
+    data = []
     with open(reports_json, 'r', encoding='utf-8') as file:
-        data = json.load(file)
+        for line in file:
+            if line.strip():
+                try:
+                    data.append(json.loads(line))
+                except json.JSONDecodeError:
+                    # Fallback for old single-array format if needed
+                    try:
+                        file.seek(0)
+                        data = json.load(file)
+                        break
+                    except:
+                        continue
 
     # Prepare TSV file for writing
     with open(reports_tsv, 'w', newline='', encoding='utf-8') as tsv_file:
@@ -134,8 +165,8 @@ def preper_report_to_tsv(reports_json,cleaned_reports_tsv,reports_links_csv) :
             link = obj['link']
             group_name = obj['group_name']
             rapport = obj['rapport']
-            second_name = get_first_second_name(reports_links_csv ,group_name )
-            rapport = transform_rapport(rapport, group_name, second_name)
+            aliases_str = get_group_aliases(reports_links_csv, group_name)
+            rapport = transform_rapport(rapport, group_name, aliases_str)
             # Unescape and sanitize the rapport field
             unc_rapp = unescape_json_string(rapport)
             tsv_rapp = sanitize_tsv_value(unc_rapp)

@@ -1,5 +1,5 @@
 import pandas as pd
-from Models.GeminiApi import bard
+from Models.OllamaApi import bard
 from Models.llama_7b_qlora import generate_text_with_llama
 from Models.llama_7b_qlora_CTI import generate_text_with_llama_CTI
 

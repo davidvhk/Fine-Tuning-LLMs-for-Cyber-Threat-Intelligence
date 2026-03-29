@@ -3,37 +3,8 @@ import json
 import os
 import time
 
-from Models.GeminiApi import bard
-
-
-def clean_response(response):
-        """
-        Cleans the response by extracting valid JSON objects.
-        
-        Parameters:
-        - response (str): The response from the bard function.
-        
-        Returns:
-        - cleaned_objects (list): A list of cleaned JSON objects.
-        """
-        lines = response.split("\n")
-        json_objects = []
-        in_json_object = False
-        json_buffer = []
-
-        for line in lines:
-            if line.startswith("{"):
-                in_json_object = True
-                json_buffer.append(line)
-            elif line.startswith("}") and in_json_object:
-                json_buffer.append(line)
-                json_objects.append("\n".join(json_buffer))
-                in_json_object = False
-                json_buffer = []
-            elif in_json_object:
-                json_buffer.append(line)
-
-        return json_objects
+from Models.OllamaApi import bard
+from Scrap.QCM_generating.utils import clean_response, is_valid_qcm, sanitize_qcm
 
 def generate_cwes_qcm(cwes, output_json_filename='Data/logs/QCM_CWE.json'):
     # Load existing progress
@@ -58,7 +29,6 @@ def generate_cwes_qcm(cwes, output_json_filename='Data/logs/QCM_CWE.json'):
                                 
             for item in all_qcms:
                 if 'CWE_ID' in item:
-                    # Support both "CWE-79" and "79" formats
                     cid = str(item['CWE_ID'])
                     if not cid.startswith('CWE-'):
                         cid = f"CWE-{cid}"
@@ -69,11 +39,22 @@ def generate_cwes_qcm(cwes, output_json_filename='Data/logs/QCM_CWE.json'):
 
     # Initialize variables
     base_text = '''You are a cybersecurity expert specializing in Common Weakness Enumeration (CWE). Given the text below, please generate a maximum of 20 multiple-choice questions (MCQ) ( 1 question for each CWE provided in the text below) with four possible options.
-... (rest of prompt instructions) ...
-'''
+    
+    Output format: a series of JSON objects (one per question) with these keys: 
+    - "CWE_ID": the CWE ID from input
+    - "Reference": The CWE ID (e.g. "CWE-79")
+    - "Question": The technical question
+    - "Option A": Choice A
+    - "Option B": Choice B
+    - "Option C": Choice C
+    - "Option D": Choice D
+    - "Correct Answer": A, B, C, or D
+    - "Explanation": Brief explanation
+    
+    Output ONLY JSON objects, nothing else. No nested lists or arrays in values.
+    '''
 
     # Filter out CWEs already processed
-    # cwes is likely a DataFrame, and its ID column might be 79 or CWE-79
     def get_full_id(cid):
         cid_str = str(cid)
         return cid_str if cid_str.startswith('CWE-') else f"CWE-{cid_str}"
@@ -84,9 +65,9 @@ def generate_cwes_qcm(cwes, output_json_filename='Data/logs/QCM_CWE.json'):
         print("All CWEs already have MCQs.")
         return all_qcms
 
-    print(f"Generating MCQs for {len(todo_df)} remaining CWEs...")
+    print(f"Generating MCQs for {len(todo_df)} remaining CWEs using Ollama...")
 
-    max_cwes_per_request = 10
+    max_cwes_per_request = 5
     
     for i in range(0, len(todo_df), max_cwes_per_request):
         batch = todo_df.iloc[i:i+max_cwes_per_request]
@@ -96,7 +77,7 @@ def generate_cwes_qcm(cwes, output_json_filename='Data/logs/QCM_CWE.json'):
             text_representation = f"CWE ID: {cwe['ID']}\nDescription: {cwe['Description']} . {cwe['Extended Description']} \n"
             accumulated_text += text_representation + "\n\n"
 
-        print(f"  Requesting Gemini for CWE batch {i//max_cwes_per_request + 1}...")
+        print(f"  Requesting Ollama for CWE batch {i//max_cwes_per_request + 1}...")
         try:
             response = bard(accumulated_text)
             if not response:
@@ -108,8 +89,13 @@ def generate_cwes_qcm(cwes, output_json_filename='Data/logs/QCM_CWE.json'):
             for obj_str in json_objects:
                 try:
                     obj = json.loads(obj_str)
-                    all_qcms.append(obj)
-                    new_count += 1
+                    # Clean the object from arrays or brackets
+                    obj = sanitize_qcm(obj)
+                    if is_valid_qcm(obj, 'CWE_ID'):
+                        all_qcms.append(obj)
+                        new_count += 1
+                    else:
+                        print(f"    Warning: Skipping empty/invalid CWE MCQ for {obj.get('CWE_ID', 'Unknown')}")
                 except:
                     continue
             
@@ -118,14 +104,10 @@ def generate_cwes_qcm(cwes, output_json_filename='Data/logs/QCM_CWE.json'):
                 json.dump(all_qcms, f, indent=4)
             
             print(f"    Added {new_count} new MCQs. Total: {len(all_qcms)}")
-            time.sleep(5)
+            time.sleep(2)
             
         except Exception as e:
             print(f"    Error processing CWE batch: {e}")
-            if "429" in str(e) or "quota" in str(e).lower():
-                print("    Quota reached. Stopping CWE QCM generation.")
-                break
             continue
 
     return all_qcms
-

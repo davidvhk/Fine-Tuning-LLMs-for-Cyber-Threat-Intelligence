@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import time
+import random
 import pandas as pd
 import os
 
@@ -17,10 +18,18 @@ MAX_WORD_COUNT = 8000
 MIN_OCCURRENCES = 2
 
 # Browser-like headers to avoid blocking
-HEADERS = {
+BASE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,video/mp4,video/webm,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "cross-site",
+    "Referer": "https://www.google.com/"
 }
 
 def count_words(text):
@@ -28,17 +37,71 @@ def count_words(text):
     return len(re.findall(r'\w+', text))
 
 def fetch_with_retries(url, retries=RETRY_COUNT, delay=RETRY_DELAY):
-    """Fetch URL content with retry logic using requests."""
+    """Fetch URL content with multiple fallback strategies for Cloudflare/403s."""
+    
+    # Strategy 1: Requests with modern headers
+    session = requests.Session()
+    
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0"
+    ]
+
     for attempt in range(retries):
+        current_ua = user_agents[attempt % len(user_agents)]
+        headers = BASE_HEADERS.copy()
+        headers["User-Agent"] = current_ua
+        
         try:
-            response = requests.get(url, headers=HEADERS, timeout=30)
+            # First try hitting the root domain to get cookies
+            domain = "/".join(url.split("/")[:3])
+            try:
+                session.get(domain, headers={"User-Agent": current_ua}, timeout=10)
+            except:
+                pass
+            
+            response = session.get(url, headers=headers, timeout=30, allow_redirects=True)
             if response.status_code == 200:
                 return response
+            elif response.status_code == 403:
+                print(f"  Requests failed (403). Trying fallback for {url}")
+                # Strategy 2: urllib.request (different TLS fingerprint)
+                import urllib.request
+                import ssl
+                import gzip
+                
+                try:
+                    req = urllib.request.Request(url, headers=headers)
+                    context = ssl._create_unverified_context()
+                    with urllib.request.urlopen(req, timeout=20, context=context) as u_resp:
+                        if u_resp.status == 200:
+                            content = u_resp.read()
+                            encoding = u_resp.info().get('Content-Encoding')
+                            if encoding == 'gzip':
+                                content = gzip.decompress(content)
+                            elif encoding == 'deflate':
+                                try:
+                                    import zlib
+                                    content = zlib.decompress(content)
+                                except:
+                                    pass
+                                    
+                            class MockResponse:
+                                def __init__(self, text):
+                                    self.text = text
+                                    self.status_code = 200
+                            return MockResponse(content.decode('utf-8', errors='replace'))
+                except Exception as ue:
+                    print(f"    Urllib fallback also failed: {ue}")
             else:
                 print(f"  Request failed: {response.status_code} (Attempt {attempt + 1}/{retries})")
         except Exception as e:
-            print(f"  Request error: {e} (Attempt {attempt + 1}/{retries})")
-        time.sleep(delay)
+            print(f"  Request error: {e}")
+        
+        if attempt < retries - 1:
+            time.sleep(delay + random.uniform(1, 3))
+            
     return None
 
 def process_links(row):
@@ -50,8 +113,8 @@ def process_links(row):
     # Names to look for (main name + aliases)
     names_to_match = [str(row.get('group_name', '')).lower()]
     aliases_str = str(row.get('aliases', ''))
-    if aliases_str:
-        aliases = [a.strip().lower() for a in aliases_str.split(',') if a.strip()]
+    if aliases_str and str(aliases_str).lower() != 'nan':
+        aliases = [a.strip().lower() for a in str(aliases_str).split(',') if a.strip()]
         names_to_match.extend(aliases)
     
     # Ensure directory for individual reports exists
@@ -60,19 +123,14 @@ def process_links(row):
     link_num = 1
     for link in links:
         if not link: continue
-        
-        # Try to clean URL (Gemini sometimes adds extra chars)
         link = link.strip('."\'')
         
         print(f"  Validating: {link}")
         try:
             response = fetch_with_retries(link)
             if response is None:
-                # Try adding/removing trailing slash as a last ditch effort for 404s
-                if link.endswith('/'):
-                    alt_link = link[:-1]
-                else:
-                    alt_link = link + '/'
+                # Try adding/removing trailing slash
+                alt_link = link[:-1] if link.endswith('/') else link + '/'
                 print(f"    Retrying alternative: {alt_link}")
                 response = fetch_with_retries(alt_link, retries=1)
                 
@@ -81,31 +139,38 @@ def process_links(row):
                 continue
                 
             page_content = response.text
-            soup = BeautifulSoup(page_content, 'html.parser')
+            try:
+                soup = BeautifulSoup(page_content, 'lxml')
+            except Exception:
+                soup = BeautifulSoup(page_content, 'html.parser')
             
-            # Try to find main content
-            article = soup.find('article') or soup.find('main') or \
-                      soup.find('div', class_=re.compile(r'content|post|article|body', re.I)) or \
-                      soup.find('section', class_=re.compile(r'content|post|article', re.I)) or \
+            article = soup.find('article') or \
+                      soup.find('main') or \
+                      soup.find('div', class_=re.compile(r'content|post|article|body|main|entry|story', re.I)) or \
+                      soup.find('section', class_=re.compile(r'content|post|article|body|main', re.I)) or \
+                      soup.find('div', id=re.compile(r'content|post|article|body|main', re.I)) or \
                       soup.find('body')
 
             if article:
-                # Remove script and style elements
-                for element in article(["script", "style", "nav", "header", "footer"]):
+                for element in article(["script", "style", "nav", "header", "footer", "aside"]):
                     element.decompose()
                     
                 article_text = article.get_text(separator=' ', strip=True)
+                if len(article_text) < 200 and article.name != 'body':
+                    article = soup.find('body')
+                    if article:
+                        for element in article(["script", "style", "nav", "header", "footer", "aside"]):
+                            element.decompose()
+                        article_text = article.get_text(separator=' ', strip=True)
+
                 word_count = count_words(article_text)
                 text_lower = article_text.lower()
 
-                # Validation criteria: check if ANY of the names/aliases appear
                 match_count = 0
                 for name in names_to_match:
-                    if name and len(name) > 2: # Avoid tiny strings
-                        count = text_lower.count(name)
-                        match_count += count
+                    if name and len(name) > 2:
+                        match_count += text_lower.count(name)
                 
-                # Check for "External ID" like G1014 if available
                 gid = str(row.get('group_id', '')).lower()
                 if gid:
                     match_count += text_lower.count(gid)
@@ -143,15 +208,9 @@ def validate_reports(reports_links='Data/logs/reports_links.csv', valid_reports_
     temp_valid_file = 'Data/logs/temp_valid_reports_links.csv'
     os.makedirs(os.path.dirname(temp_valid_file), exist_ok=True)
 
-    # Ensure output files exist with headers at the start
     if not os.path.exists(temp_valid_file):
         with open(temp_valid_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=['group_id', 'group_name', 'links'])
-            writer.writeheader()
-
-    if not os.path.exists(valid_reports_links_csv):
-        with open(valid_reports_links_csv, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=['URL', 'group_name', 'file_name'])
+            writer = csv.DictWriter(f, fieldnames=['group_id', 'group_name', 'aliases', 'links'])
             writer.writeheader()
 
     existing_data = load_existing_csv(temp_valid_file)
@@ -176,28 +235,28 @@ def validate_reports(reports_links='Data/logs/reports_links.csv', valid_reports_
         row_dict = row.to_dict()
         row_dict['links'] = process_links(row_dict)
         
-        # Save progress
         with open(temp_valid_file, 'a', newline='', encoding='utf-8') as f:
-            fieldnames = ['group_id', 'group_name', 'links']
+            fieldnames = ['group_id', 'group_name', 'aliases', 'links']
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
             writer.writerows([row_dict])
 
-    # Final conversion to the required output format
     if os.path.exists(temp_valid_file):
         with open(temp_valid_file, 'r', encoding='utf-8') as infile:
             reader = csv.DictReader(infile)
             with open(valid_reports_links_csv, 'w', newline='', encoding='utf-8') as outfile:
-                fieldnames = ['URL', 'group_name', 'file_name']
+                fieldnames = ['URL', 'group_name', 'aliases', 'file_name']
                 writer = csv.DictWriter(outfile, fieldnames=fieldnames)
                 writer.writeheader()
                 for row in reader:
                     if not row.get('links'): continue
                     group_name = row['group_name']
+                    aliases = row.get('aliases', '')
                     links = [l.strip() for l in row['links'].split(',') if l.strip()]
                     for idx, link in enumerate(links, 1):
                         writer.writerow({
                             'URL': link, 
                             'group_name': group_name, 
+                            'aliases': aliases,
                             'file_name': f"{group_name}R{idx}".replace(' ', '_')
                         })
 

@@ -121,11 +121,14 @@ import os
 import json
 import requests
 
-NVD_API_KEY = "d29789a4-a1a2-43bc-84a4-7405eccf3699"
-START_YEAR = 2018
+NVD_API_KEY = os.getenv("NVD_API_KEY")
+START_YEAR = 2000
 REFRESH_LINKS = False  # Set to True to re-fetch all links from the API
 REFRESH_DATA = False   # Set to True to re-download detailed data for all CVEs
-REFRESH_CWE = False    # Set to True to re-download all CWE descriptions
+REFRESH_CWE = True    # Set to True to re-download all CWE descriptions
+REFRESH_REPORT_LINKS = True # Set to True to re-fetch all report links with improved queries
+VALIDATE_REPORTS = True # Set to True to use Ollama for deep validation of reports
+GENERATE_QCMS = True    # Set to True to use Ollama for generating new MCQs (CWE, CVE, CAPEC, Techniques)
 
 cve_links_file = "Data/logs/cve_links.csv"
 
@@ -493,7 +496,7 @@ display(HTML(html_table))
 # In[ ]:
 
 
-from Scrap.Reports_scraper import deep_validation
+from Scrap.Reports_scraper.deep_validation import deep_validation
 from Scrap.Reports_scraper.reports_validation import scrap_reports
 from Scrap.Reports_scraper.scrap_reports_links import get_existing_groups, scrap_reports_links
 
@@ -532,14 +535,25 @@ if not os.path.exists(intrusion_sets):
 exicting_groups = get_existing_groups(intrusion_sets)
 
 output_reports_links_csv = r'Data/logs/reports_links.csv'
-scrap_reports_links(exicting_groups,output_reports_links_csv)
+scrap_reports_links(exicting_groups,output_reports_links_csv, force_refresh=REFRESH_REPORT_LINKS)
 
 output_reports_data_tsv = r'Data/logs/reports_data_tsv'
 scrap_reports(output_reports_links_csv,output_reports_data_tsv)
 
 
-final_reports = r"Data/collected_data"
-deep_validation(output_reports_data_tsv ,final_reports)
+final_reports = r"Data/collected_data/rapports_data.csv"
+
+if VALIDATE_REPORTS:
+    print("Performing Deep Validation with Ollama...")
+    deep_validation(output_reports_data_tsv, final_reports)
+else:
+    print("Skipping Ollama validation. Using all scraped reports directly...")
+    # Just copy the TSV to the final CSV location if validation is skipped
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(final_reports), exist_ok=True)
+    df_temp = pd.read_csv(output_reports_data_tsv, sep="\t")
+    df_temp.to_csv(final_reports, sep="\t", index=False)
+    print(f"Directly saved {len(df_temp)} reports to {final_reports}")
 
 
 # #### 2.5.4. Summarize data scraped
@@ -547,7 +561,7 @@ deep_validation(output_reports_data_tsv ,final_reports)
 # In[13]:
 
 
-reports = pd.read_csv(r"Data/rapports_data.csv")
+reports = pd.read_csv(final_reports, sep="\t")
 
 
 # ##### 2.5.4.1 Row exemple
@@ -646,144 +660,95 @@ from Scrap.QCM_generating.generate_cwe_related import generate_cwes_qcm
 from Scrap.QCM_generating.generate_techniques_related import generate_techniques_qcm
 
 
-cwes_qcms = generate_cwes_qcm(cwe_data)
+if GENERATE_QCMS:
+    print("Generating MCQs using Ollama...")
+    cwes_qcms = generate_cwes_qcm(cwe_data)
+    cves_qcms = generate_cves_qcm(cve_data)
+    CAPEC_qcms = generate_capec_qcm(CAPEC_data)
+    techniques_qcms = generate_techniques_qcm(attack_patterns_data)
 
-cves_qcms = generate_cves_qcm(cve_data)
+    # #### 2.6.5. Summarize data generated
+    try:
+        with open(r'Data/logs/QCM_TECHNIQUES.json', 'r') as file:
+            data = json.load(file)
+        
+        def format_json_display(data, indent=4):
+            import json
+            formatted = json.dumps(data, indent=indent)
+            formatted = formatted.replace("  ", "&nbsp;&nbsp;")
+            return f"<pre style='font-size: 12px;padding: 10px; border: 1px solid #ddd;'>{formatted}</pre>"
 
-CAPEC_qcms = generate_capec_qcm(CAPEC_data)
+        if isinstance(data, list) and len(data) > 2:
+            first_object = data[2]
+            formatted_json = format_json_display(first_object)
+            print("Example of technique QCM generated:")
+            display(HTML(formatted_json))
+    except Exception as e:
+        print(f"Skipping QCM Techniques display: {e}")
 
-techniques_qcms = generate_techniques_qcm(attack_patterns_data)
+    try:
+        data_files = ["QCM_CAPEC", "QCM_CVE", "QCM_CWE", "QCM_TECHNIQUES"]
+        def preper_data_local(filename):
+            import pandas as pd
+            import os
+            fpath = fr'Data/hidden/{filename}.json'
+            if not os.path.exists(fpath):
+                return pd.DataFrame()
+            try:
+                df = pd.read_json(fpath)
+                new_df = pd.DataFrame()
+                cols = ["Reference", "Question", "Option A", "Option B", "Option C", "Option D", "Correct Answer", "Explanation"]
+                for col in cols:
+                    if col in df.columns:
+                        new_df[col] = df[col]
+                new_df["qcm_type"] = filename
+                return new_df
+            except:
+                return pd.DataFrame()
 
+        final_df = pd.DataFrame()
+        for filename in data_files:
+            im_df = preper_data_local(filename)
+            if not im_df.empty:
+                final_df = pd.concat([final_df, im_df], ignore_index=True)
 
+        if not final_df.empty:
+            plt.figure(figsize=(12, 6))
+            plt.hist(final_df['qcm_type'], bins=30, edgecolor='k', color='skyblue')
+            plt.title('Number of generated MCQ per type', fontsize=14)
+            plt.xticks(rotation=45)
+            plt.show()
+    except Exception as e:
+        print(f"Skipping QCM summary plots: {e}")
 
+    from Scrap.QCM_generating.data_augmentation import balance_data
+    try:
+        qcms = balance_data([cwes_qcms, cves_qcms, CAPEC_qcms, techniques_qcms])
+    except Exception as e:
+        print(f"Skipping data balancing: {e}")
 
-# #### 2.6.5. **Summarize** data generated
-
-# ##### 2.6.5.1 Row Exemple 
-
-# In[3]:
-
-
-import json
-with open(r'Data/logs/QCM_TECHNIQUES.json', 'r') as file:
-    data = json.load(file)
-def format_json(data, indent=4):
-    """Format JSON data with indentation and syntax highlighting"""
-    formatted_json = json.dumps(data, indent=indent)
-    formatted_json = formatted_json.replace("  ", "&nbsp;&nbsp;")
-    return f"<pre style='font-size: 12px;padding: 10px; border: 1px solid #ddd;'>{formatted_json}</pre>"
-
-# Get the first object (assuming the JSON is a list of objects)
-first_object = data[2] if isinstance(data, list) and len(data) > 0 else data
-
-# Print the formatted JSON
-formatted_json = format_json(first_object)
-display(HTML(formatted_json))
-
-
-# ##### 2.6.5.2 Number Of Generated MCQ per Type
-
-# In[77]:
-
-
-import pandas as pd
-
-data_files = ["QCM_CAPEC", "QCM_CVE", "QCM_CWE","QCM_TECHNIQUES"]
-def preper_data(filename):
-
-    new_df = pd.DataFrame()
-    df = pd.read_json(fr'Data/hidden/{filename}.json')
-    new_df["Reference"] = df["Reference"]
-    new_df["Question"] = df["Question"]
-    new_df["Option A"] = df["Option A"]
-    new_df["Option B"] = df["Option B"]
-    new_df["Option C"] = df["Option C"]
-    new_df["Option D"] = df["Option D"]
-    new_df["Correct Answer"] = df["Correct Answer"]
-    new_df["Explanation"] = df["Explanation"]
-    new_df["qcm_type"] = filename
-  
-    return new_df
-
-final_df = pd.DataFrame()
-for filename in data_files : 
-    im_df = preper_data(filename)
-    final_df = pd.concat([final_df, im_df], ignore_index=True)
-
-
-plt.figure(figsize=(12, 6))
-plt.hist(final_df['qcm_type'], bins=30, edgecolor='k', color='skyblue')
-plt.title('number of generated MCQ per type ', fontsize=14)
-plt.xlabel('MCQ types', fontsize=12)
-plt.ylabel('number of MCQs', fontsize=12)
-plt.xticks(rotation=45)
-plt.grid(axis='y', linestyle='--', alpha=0.7)
-plt.tight_layout()
-plt.show()
-
-
-
-# #### 2.6.6. Data Balancing
-# 
-# To ensure a balanced dataset, various QCMs (Questionnaire or Multiple Choice Questions) are combined and balanced using data augmentation techniques. The datasets involved are:
-# 
-# - **CWE QCMs**
-# - **CVE QCMs**
-# - **CAPEC QCMs**
-# - **Techniques QCMs**
-# 
-# ### Balancing Process
-# 
-# The datasets are balanced using data augmentation techniques provided by the `AIDataAugment.TextAugmentor` library. This library assists in augmenting text datasets to address imbalances.
-# 
-# **Library**: `AIDataAugment.TextAugmentor`
-# 
-# The [TextAugmentor](https://github.com/FaroukDaboussi0/AIDataAugment/blob/master/README.md) library uses advanced  Google Gemini to reformulate questions, preserving their meaning while creating diverse variations. After augmentation, answer options are shuffled to ensure variety and quality. This approach effectively balances the dataset, preparing it for further analysis or training.
-# 
-
-# In[ ]:
-
-
-from Scrap.QCM_generating.data_augmentation import balance_data
-
-
-qcms = balance_data([cwes_qcms,cves_qcms,CAPEC_qcms,techniques_qcms])
-
-
-# ##### 2.6.6.1 Number Of Generated MCQ per Type
-
-# In[33]:
-
-
-import pandas as pd
-
-# Load the dataset and drop the first column
-qcms = pd.read_csv(r"Data/finetuning_data/MCQs_augmented.csv")
-qcms = qcms.drop(qcms.columns[0], axis=1)
-
-def get_type(text):
-    if text.startswith("T"):
-        return "QCM_TECHNIQUES"
-    elif text.startswith("CAPEC"):
-        return "QCM_CAPEC"
-    elif text.startswith("CWE"):
-        return "QCM_CWE"
-    elif text.startswith("CVE"):
-        return "QCM_CVE"
-    else:
-        return "UNKNOWN"  # Handle cases where the text does not match any criteria
-
-# Apply the function to the 'Reference' column
-qcms["type"] = qcms["Reference"].apply(get_type) 
-plt.figure(figsize=(12, 6))
-plt.hist(qcms['type'], bins=30, edgecolor='k', color='skyblue')
-plt.title('number of generated MCQ per type after Text Augmentation ', fontsize=14)
-plt.xlabel('MCQ types', fontsize=12)
-plt.ylabel('number of MCQs', fontsize=12)
-plt.xticks(rotation=45)
-plt.grid(axis='y', linestyle='--', alpha=0.7)
-plt.tight_layout()
-plt.show()
+    try:
+        aug_path = r"Data/finetuning_data/MCQs_augmented.csv"
+        if os.path.exists(aug_path):
+            qcms_aug = pd.read_csv(aug_path)
+            qcms_aug = qcms_aug.drop(qcms_aug.columns[0], axis=1)
+            def get_type_local(text):
+                t = str(text)
+                if t.startswith("T"): return "QCM_TECHNIQUES"
+                if t.startswith("CAPEC"): return "QCM_CAPEC"
+                if t.startswith("CWE"): return "QCM_CWE"
+                if t.startswith("CVE"): return "QCM_CVE"
+                return "UNKNOWN"
+            qcms_aug["type"] = qcms_aug["Reference"].apply(get_type_local)
+            plt.figure(figsize=(12, 6))
+            plt.hist(qcms_aug['type'], bins=30, edgecolor='k', color='skyblue')
+            plt.title('Number of generated MCQ per type after Text Augmentation', fontsize=14)
+            plt.show()
+    except Exception as e:
+        print(f"Skipping augmented QCM summary: {e}")
+else:
+    print("Skipping MCQ generation, balancing and summary (GENERATE_QCMS=False).")
+    cwes_qcms, cves_qcms, CAPEC_qcms, techniques_qcms = [], [], [], []
 
 
 # ## 3. Data Preparation
@@ -861,13 +826,25 @@ cti_vsp = "Data/finetuning_data/cti-vsp.csv"
 cti_mcq = "Data/finetuning_data/cti_mcq.csv"
 cti_tta = "Data/finetuning_data/cti_tta.csv"
 
-preper_cti_rcm_to_train(cve_data,cti_rcm)
+try:
+    preper_cti_rcm_to_train(cve_data,cti_rcm)
+except Exception as e:
+    print(f"Skipping CTI RCM prep: {e}")
 
-preper_cti_vsp_to_train(cve_data,cti_vsp)
+try:
+    preper_cti_vsp_to_train(cve_data,cti_vsp)
+except Exception as e:
+    print(f"Skipping CTI VSP prep: {e}")
 
-preper_cti_mcq_to_train(qcm_data,cti_mcq)
+try:
+    preper_cti_mcq_to_train(qcm_data,cti_mcq)
+except Exception as e:
+    print(f"Skipping CTI MCQ prep (Likely missing or LFS MCQ data): {e}")
 
-preper_cti_tta_to_train(reports_data,cti_tta)
+try:
+    preper_cti_tta_to_train(reports_data,cti_tta)
+except Exception as e:
+    print(f"Skipping CTI TTA prep: {e}")
 
 
 
@@ -881,7 +858,7 @@ preper_cti_tta_to_train(reports_data,cti_tta)
 import pandas as pd
 
 # List of CSV filenames
-filenames = ["cti-rcm", "cti-vsp", "cti_mcq", "cti_tta"]
+filenames = ["cti_rcm", "cti_vsp", "cti_mcq", "cti_tta"]
 
 # Initialize lists to store filenames and lengths
 file_names = []
@@ -891,25 +868,29 @@ file_lengths = []
 for filename in filenames:
     # Read the CSV file
     file_path = fr"Data/finetuning_data/{filename}.csv"
-    df = pd.read_csv(file_path)
-    
-    # Append filename and number of rows to lists
-    file_names.append(filename)
-    file_lengths.append(len(df))
+    if os.path.exists(file_path):
+        try:
+            df = pd.read_csv(file_path)
+            # Append filename and number of rows to lists
+            file_names.append(filename)
+            file_lengths.append(len(df))
+        except Exception as e:
+            print(f"Skipping plot for {filename}: {e}")
 
-# Create a bar plot
-plt.figure(figsize=(10, 6))
-plt.bar(file_names, file_lengths, color='skyblue')
+if file_names:
+    # Create a bar plot
+    plt.figure(figsize=(10, 6))
+    plt.bar(file_names, file_lengths, color='skyblue')
 
-# Add titles and labels
-plt.xlabel('Filenames')
-plt.ylabel('Number of Rows')
-plt.title('Number of Rows in CSV Files')
-plt.xticks(rotation=45)  # Rotate filenames for better readability
+    # Add titles and labels
+    plt.xlabel('Filenames')
+    plt.ylabel('Number of Rows')
+    plt.title('Number of Rows in CSV Files')
+    plt.xticks(rotation=45)  # Rotate filenames for better readability
 
-# Show the plot
-plt.tight_layout()
-plt.show()
+    # Show the plot
+    plt.tight_layout()
+    plt.show()
 
 
 # ### 3.4. **Data Augmentation**
@@ -917,11 +898,14 @@ plt.show()
 # In[ ]:
 
 
-from Data_preparation.Data_augmentation import balance_train_data
-
-
-balance_train_data(cti_rcm, cti_vsp, cti_mcq, cti_tta)
-
+if GENERATE_QCMS:
+    from Data_preparation.Data_augmentation import balance_train_data
+    try:
+        balance_train_data(cti_rcm, cti_vsp, cti_mcq, cti_tta)
+    except Exception as e:
+        print(f"Skipping training data balancing: {e}")
+else:
+    print("Skipping training data balancing (GENERATE_QCMS=False).")
 
 # In[7]:
 
@@ -939,21 +923,29 @@ file_lengths = []
 for filename in filenames:
     # Read the CSV file
     file_path = fr"Data/finetuning_data/balanced_data/{filename}.csv"
-    df = pd.read_csv(file_path)
-    
-    # Append filename and number of rows to lists
-    file_names.append(filename)
-    file_lengths.append(len(df))
+    if os.path.exists(file_path):
+        try:
+            df = pd.read_csv(file_path)
+            # Append filename and number of rows to lists
+            file_names.append(filename)
+            file_lengths.append(len(df))
+        except Exception as e:
+            print(f"Skipping plot for balanced {filename}: {e}")
 
-# Create a bar plot
-plt.figure(figsize=(10, 6))
-plt.bar(file_names, file_lengths, color='skyblue')
+if file_names:
+    # Create a bar plot
+    plt.figure(figsize=(10, 6))
+    plt.bar(file_names, file_lengths, color='skyblue')
 
-# Add titles and labels
-plt.xlabel('Filenames')
-plt.ylabel('Number of Rows')
-plt.title('Number of Rows in CSV Files')
-plt.xticks(rotation=45)  # Rotate filenames for better readability
+    # Add titles and labels
+    plt.xlabel('Filenames')
+    plt.ylabel('Number of Rows')
+    plt.title('Number of Rows in CSV Files (Balanced)')
+    plt.xticks(rotation=45)  # Rotate filenames for better readability
+
+    # Show the plot
+    plt.tight_layout()
+    plt.show()
 
 # Show the plot
 plt.tight_layout()
@@ -968,12 +960,22 @@ plt.show()
 from Data_preparation.preproces_cti_data_to_llm import preprocess_cti_data_to_llm
 
 
-cti_rcm = fr"Data/finetuning_data/balanced_data/cti_rcm.csv"
-cti_vsp = fr"Data/finetuning_data/balanced_data/cti_vsp.csv"
-cti_mcq = fr"Data/finetuning_data/balanced_data/cti_mcq.csv"
-cti_tta = fr"Data/finetuning_data/balanced_data/cti_tta.csv"
-training_data = preprocess_cti_data_to_llm(cti_rcm, cti_vsp, cti_mcq, cti_tta)
-training_data.to_csv(r"Data/finetuning_data/cti_training_data.csv", index=False)
+if GENERATE_QCMS:
+    cti_rcm_prep = fr"Data/finetuning_data/balanced_data/cti_rcm.csv"
+    cti_vsp_prep = fr"Data/finetuning_data/balanced_data/cti_vsp.csv"
+    cti_mcq_prep = fr"Data/finetuning_data/balanced_data/cti_mcq.csv"
+    cti_tta_prep = fr"Data/finetuning_data/balanced_data/cti_tta.csv"
+else:
+    cti_rcm_prep = "Data/finetuning_data/cti-rcm.csv"
+    cti_vsp_prep = "Data/finetuning_data/cti-vsp.csv"
+    cti_mcq_prep = "Data/finetuning_data/cti_mcq.csv"
+    cti_tta_prep = "Data/finetuning_data/cti_tta.csv"
+
+try:
+    training_data = preprocess_cti_data_to_llm(cti_rcm_prep, cti_vsp_prep, cti_mcq_prep, cti_tta_prep)
+    training_data.to_csv(r"Data/finetuning_data/cti_training_data.csv", index=False)
+except Exception as e:
+    print(f"Skipping final training data preprocessing: {e}")
 
 
 # ### 3.5. **Training Data** Discovering
@@ -1032,7 +1034,7 @@ plt.show()
 import os
 import huggingface_hub
 
-huggingface_hub.login(token=os.environ.get('YOUR_huggingface_TOKEN'))
+huggingface_hub.login(token=os.environ.get('HUGGINGFACE_TOKEN'))
 
 
 # ### 4.2. Data Preparation

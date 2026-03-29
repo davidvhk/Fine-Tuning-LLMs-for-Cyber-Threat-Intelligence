@@ -4,23 +4,6 @@ import json
 import time
 import re
 
-from Models.GeminiApi import bard
-
-
-
-def buil_prompt(group_name,rapport) :
-    prompt = f"""
-    Remove the noise from this cyber threat attack report, mask groupe name = {group_name}  in the rapport field with [PLACEHOLDER]. This will allow students to analyze the report and attribute the incident to a known threat actor based on the techniques, tactics, procedures (TTPs), and any other relevant information described.
-
-    Important:
-    - Noise includes links, contact us sections, other article suggestions, or any information that does not relate to the report.
-
-    Output format: only the report no extra sentences 
-    
-    Text:
-    {rapport}
-    """
-    return prompt
 def escape_json_string(s):
     # Replace problematic characters with their escaped equivalents
     s = s.replace('"', '\\"')  # Escape double quotes
@@ -30,17 +13,35 @@ def escape_json_string(s):
     s = s.replace('\n', '\\n')  # Escape newline
     s = s.replace('\r', '\\r')  # Escape carriage return
     s = s.replace('\t', '\\t')  # Escape tab
-    
-    # For non-printable or control characters in Unicode, escape using \uXXXX
-    # Convert any non-ASCII characters to their Unicode escape sequence
     return ''.join(f'\\u{ord(c):04x}' if ord(c) > 127 else c for c in s)
 
+def mask_group_name(text, group_name, aliases=None):
+    """
+    Locally masks the group name and its aliases in the text.
+    """
+    names_to_mask = [group_name]
+    if aliases:
+        if isinstance(aliases, list):
+            names_to_mask.extend(aliases)
+        elif isinstance(aliases, str):
+            names_to_mask.extend([a.strip() for a in aliases.split(',') if a.strip()])
+            
+    # Sort by length descending to avoid partial matches
+    names_to_mask = sorted([n for n in names_to_mask if len(n) > 2], key=len, reverse=True)
+    
+    masked_text = text
+    for name in names_to_mask:
+        # Use regex for word boundary matching
+        pattern = re.compile(re.escape(name), re.IGNORECASE)
+        masked_text = pattern.sub("[PLACEHOLDER]", masked_text)
+        
+    return masked_text
 
-# Read the CSV file into a DataFrame
-json_filename = "rapport.json"
-dirty_rapport = "reports_links_LMM.csv"
-
-def clean_reports(dirty_rapport, json_filename):
+def clean_reports(valid_reports_links_csv, json_filename="rapport.json"):
+    """
+    Processes the validated reports, masks the names, and saves to JSON.
+    NO GEMINI USED.
+    """
     # Load already processed URLs to skip them
     processed_urls = set()
     if os.path.exists(json_filename):
@@ -58,75 +59,61 @@ def clean_reports(dirty_rapport, json_filename):
         except Exception as e:
             print(f"Error loading {json_filename}: {e}")
 
-    # Read the input CSV
-    if not os.path.exists(dirty_rapport):
-        print(f"Error: {dirty_rapport} not found.")
+    # Read the input CSV (this should be the output of validation)
+    if not os.path.exists(valid_reports_links_csv):
+        print(f"Error: {valid_reports_links_csv} not found.")
         return
 
-    df = pd.read_csv(dirty_rapport, usecols=['URL', 'group_name', 'file_name']).reset_index(drop=True)
+    df = pd.read_csv(valid_reports_links_csv).reset_index(drop=True)
     
     # Filter out already processed URLs
-    initial_count = len(df)
-    df = df[~df['URL'].isin(processed_urls)]
-    remaining_count = len(df)
+    if 'URL' in df.columns:
+        df = df[~df['URL'].isin(processed_urls)]
+    elif 'links' in df.columns:
+        df = df[~df['links'].isin(processed_urls)]
     
-    if remaining_count == 0:
-        print("All reports are already cleaned.")
+    if len(df) == 0:
+        print("All validated reports are already in the final JSON.")
         return
         
-    print(f"Processing {remaining_count} remaining reports (skipped {initial_count - remaining_count}).")
+    print(f"Adding {len(df)} new validated reports to {json_filename}...")
 
-    # Process each row in the DataFrame
+    # Process each row
     for idx, row in df.iterrows():
         group_name = row['group_name']
-        file_name = row['file_name']
-        url = row['URL']
+        url = row.get('URL', row.get('links'))
+        aliases = row.get('aliases', '')
+        file_name = row.get('file_name', '')
         
-        file_path = f"rapport/{file_name}.txt"
-        if not os.path.exists(file_path):
-            print(f"  Warning: File not found {file_path}. Skipping.")
-            continue
-
-        # Read the content of the file
-        with open(file_path, 'r', encoding='utf-8') as file:
-            report_text = file.read()
+        if not file_name:
+            # Fallback if file_name is missing
+            file_name = f"{group_name}_R1".replace(' ', '_').replace('/', '_')
             
-        if not report_text.strip():
-            print(f"  Warning: Empty report file {file_path}. Skipping.")
-            continue
-
-        print(f"  Cleaning report for {group_name} ({url})...")
-        final_prompt = buil_prompt(str(group_name), str(report_text))
+        file_path = os.path.join("rapport", f"{file_name}.txt")
         
-        try:
-            response = bard(final_prompt)
-            # Give Gemini a moment between calls
-            time.sleep(2)
-            alias_response = bard(f"give me alias (also known as) of this cyber attackers group :{group_name} . output format : split alias with coma (,) no extra sentences . exemple : lets say goup name : MuddyWater  .output exempla  : APT34, Crambus, Helix Kitten, OilRig ")
-            alias = alias_response.split(",") if alias_response else []
+        if os.path.exists(file_path):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                report_text = f.read()
             
-            if response:
-                # Escape backslashes in the report text
-                response_escaped = escape_json_string(response)
+            if report_text.strip():
+                print(f"  Processing {file_name}.txt for {group_name}...")
+                
+                # Mask the name locally
+                cleaned_text = mask_group_name(report_text, group_name, aliases)
+                
                 obj = {
                     "link": url,
                     "group_name": group_name,
-                    "alias": [a.strip() for a in alias],
-                    "rapport": response_escaped
+                    "alias": [a.strip() for a in str(aliases).split(',') if a.strip()],
+                    "rapport": escape_json_string(cleaned_text)
                 }
+                
                 with open(json_filename, 'a', encoding='utf-8') as json_file:
                     json.dump(obj, json_file, ensure_ascii=False)
                     json_file.write("\n")
-                print(f"  [OK] Report added for {group_name}")
             else:
-                print(f"  [Warning] Gemini returned empty response for {group_name}")
-                
-        except Exception as e:
-            print(f"  [Error] Failed to process {group_name}: {e}")
-            if "429" in str(e) or "quota" in str(e).lower():
-                print("  Quota reached. Stopping for now.")
-                break
-            continue
+                print(f"  Warning: Empty text file {file_path}")
+        else:
+            print(f"  Warning: No text file found at {file_path}")
 
-
-
+    print(f"Final report processing complete.")

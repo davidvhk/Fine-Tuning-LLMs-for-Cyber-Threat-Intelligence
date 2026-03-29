@@ -3,9 +3,8 @@ import json
 import os
 import time
 
-from Models.GeminiApi import bard
-
-
+from Models.OllamaApi import bard
+from Scrap.QCM_generating.utils import clean_response, is_valid_qcm, sanitize_qcm
 
 def generate_capec_qcm(capecs, output_json_filename='Data/logs/QCM_CAPEC.json'):
     # Load existing progress
@@ -30,7 +29,6 @@ def generate_capec_qcm(capecs, output_json_filename='Data/logs/QCM_CAPEC.json'):
 
             for item in all_qcms:
                 if 'CAPEC_ID' in item:
-                    # Support both "CAPEC-1" and "1" formats
                     cid = str(item['CAPEC_ID'])
                     if not cid.startswith('CAPEC-'):
                         cid = f"CAPEC-{cid}"
@@ -41,8 +39,20 @@ def generate_capec_qcm(capecs, output_json_filename='Data/logs/QCM_CAPEC.json'):
 
     # Initialize variables
     base_text = '''You are a cybersecurity expert specializing in Common Attack Pattern Enumeration and Classification (CAPEC). Given the text below, please generate a maximum of 20 multiple-choice questions (MCQ)  with four possible options ( 1 question for each CAPEC provided in the text below).
-... (rest of prompt instructions) ...
-'''
+    
+    Output format: a series of JSON objects (one per question) with these keys:
+    - "CAPEC_ID": the CAPEC ID from input
+    - "Reference": The CAPEC ID (e.g. "CAPEC-1")
+    - "Question": The technical question
+    - "Option A": Choice A
+    - "Option B": Choice B
+    - "Option C": Choice C
+    - "Option D": Choice D
+    - "Correct Answer": A, B, C, or D
+    - "Explanation": Brief explanation
+    
+    Output ONLY JSON objects, nothing else. No nested lists or arrays in values.
+    '''
 
     # Filter out CAPECs already processed
     def get_full_id(cid):
@@ -55,9 +65,9 @@ def generate_capec_qcm(capecs, output_json_filename='Data/logs/QCM_CAPEC.json'):
         print("All CAPECs already have MCQs.")
         return all_qcms
 
-    print(f"Generating MCQs for {len(todo_df)} remaining CAPECs...")
+    print(f"Generating MCQs for {len(todo_df)} remaining CAPECs using Ollama...")
 
-    max_capecs_per_request = 10
+    max_capecs_per_request = 5
 
     for i in range(0, len(todo_df), max_capecs_per_request):
         batch = todo_df.iloc[i:i+max_capecs_per_request]
@@ -83,7 +93,7 @@ def generate_capec_qcm(capecs, output_json_filename='Data/logs/QCM_CAPEC.json'):
                                 f"Related Weaknesses: {capec['Related Weaknesses']}\n")
             accumulated_text += text_representation + "\n\n"
 
-        print(f"  Requesting Gemini for CAPEC batch {i//max_capecs_per_request + 1}...")
+        print(f"  Requesting Ollama for CAPEC batch {i//max_capecs_per_request + 1}...")
         try:
             response = bard(accumulated_text)
             if not response:
@@ -95,8 +105,12 @@ def generate_capec_qcm(capecs, output_json_filename='Data/logs/QCM_CAPEC.json'):
             for obj_str in json_objects:
                 try:
                     obj = json.loads(obj_str)
-                    all_qcms.append(obj)
-                    new_count += 1
+                    obj = sanitize_qcm(obj)
+                    if is_valid_qcm(obj, 'CAPEC_ID'):
+                        all_qcms.append(obj)
+                        new_count += 1
+                    else:
+                        print(f"    Warning: Skipping empty/invalid CAPEC MCQ for {obj.get('CAPEC_ID', 'Unknown')}")
                 except:
                     continue
 
@@ -105,13 +119,10 @@ def generate_capec_qcm(capecs, output_json_filename='Data/logs/QCM_CAPEC.json'):
                 json.dump(all_qcms, f, indent=4)
 
             print(f"    Added {new_count} new MCQs. Total: {len(all_qcms)}")
-            time.sleep(5)
+            time.sleep(2)
 
         except Exception as e:
             print(f"    Error processing CAPEC batch: {e}")
-            if "429" in str(e) or "quota" in str(e).lower():
-                print("    Quota reached. Stopping CAPEC QCM generation.")
-                break
             continue
 
     return all_qcms

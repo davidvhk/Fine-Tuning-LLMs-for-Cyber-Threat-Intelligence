@@ -1,13 +1,20 @@
 import pandas as pd
+import os
 
 def preprocess_cti_data_to_llm(cti_rcm_path, cti_vsp_path, cti_mcq_path, cti_tta_path):
-   
+    def safe_read(path):
+        if os.path.exists(path):
+            try:
+                return pd.read_csv(path)
+            except:
+                return pd.DataFrame()
+        return pd.DataFrame()
 
     # Read the CSV files
-    cti_rcm = pd.read_csv(cti_rcm_path)  # columns: Description, GT
-    cti_vsp = pd.read_csv(cti_vsp_path)  # columns: Description, GT
-    cti_mcq = pd.read_csv(cti_mcq_path)  # columns: URL, Question, Option A, Option B, Option C, Option D, GT
-    cti_tta = pd.read_csv(cti_tta_path)  # columns: URL, Text, GT
+    cti_rcm = safe_read(cti_rcm_path)
+    cti_vsp = safe_read(cti_vsp_path)
+    cti_mcq = safe_read(cti_mcq_path)
+    cti_tta = safe_read(cti_tta_path)
 
     # Define prompt templates
     cti_tta_prompt_template = ("You are given a threat report that describes a cyber incident. Any direct mentions of "
@@ -33,25 +40,36 @@ def preprocess_cti_data_to_llm(cti_rcm_path, cti_vsp_path, cti_mcq_path, cti_tta
                                "A) {option_a} B) {option_b} C) {option_c} D) {option_d} **Important:** The last line of your "
                                "answer should contain only the single letter corresponding to the best option, with no additional text.")
     
-    # Apply the prompts to each dataframe
-    cti_tta['Prompt'] = cti_tta['Text'].apply(lambda text: cti_tta_prompt_template.format(Text=text))
-    cti_vsp['Prompt'] = cti_vsp['Description'].apply(lambda desc: cti_vsp_prompt_template.format(Description=desc))
-    cti_rcm['Prompt'] = cti_rcm['Description'].apply(lambda desc: cti_rcm_prompt_template.format(Description=desc))
-    cti_mcq['Prompt'] = cti_mcq.apply(lambda row: cti_mcq_prompt_template.format(
-        question=row['Question'],
-        option_a=row['Option A'],
-        option_b=row['Option B'],
-        option_c=row['Option C'],
-        option_d=row['Option D']
-    ), axis=1)
+    final_dfs = []
 
-    # Combine the prompt and GT columns into a new DataFrame for training
-    cti_vsp_final = cti_vsp[['Prompt', 'GT']]
-    cti_rcm_final = cti_rcm[['Prompt', 'GT']]
-    cti_mcq_final = cti_mcq[['Prompt', 'GT']]
-    cti_tta_final = cti_tta[['Prompt', 'GT']]
+    # Apply the prompts to each dataframe if it's not empty and has required columns
+    if not cti_tta.empty and 'Text' in cti_tta.columns and 'GT' in cti_tta.columns:
+        cti_tta['Prompt'] = cti_tta['Text'].apply(lambda text: cti_tta_prompt_template.format(Text=text))
+        final_dfs.append(cti_tta[['Prompt', 'GT']])
 
-    # Concatenate all the dataframes into the final training DataFrame
-    training_df = pd.concat([cti_vsp_final, cti_rcm_final, cti_mcq_final, cti_tta_final], ignore_index=True)
+    if not cti_vsp.empty and 'Description' in cti_vsp.columns and 'GT' in cti_vsp.columns:
+        cti_vsp['Prompt'] = cti_vsp['Description'].apply(lambda desc: cti_vsp_prompt_template.format(Description=desc))
+        final_dfs.append(cti_vsp[['Prompt', 'GT']])
+
+    if not cti_rcm.empty and 'Description' in cti_rcm.columns and 'GT' in cti_rcm.columns:
+        cti_rcm['Prompt'] = cti_rcm['Description'].apply(lambda desc: cti_rcm_prompt_template.format(Description=desc))
+        final_dfs.append(cti_rcm[['Prompt', 'GT']])
+
+    if not cti_mcq.empty and all(col in cti_mcq.columns for col in ['Question', 'Option A', 'Option B', 'Option C', 'Option D', 'GT']):
+        cti_mcq['Prompt'] = cti_mcq.apply(lambda row: cti_mcq_prompt_template.format(
+            question=row['Question'],
+            option_a=row['Option A'],
+            option_b=row['Option B'],
+            option_c=row['Option C'],
+            option_d=row['Option D']
+        ), axis=1)
+        final_dfs.append(cti_mcq[['Prompt', 'GT']])
+
+    if not final_dfs:
+        print("Warning: No valid training data could be preprocessed.")
+        return pd.DataFrame(columns=['Prompt', 'GT'])
+
+    # Concatenate all valid dataframes into the final training DataFrame
+    training_df = pd.concat(final_dfs, ignore_index=True)
 
     return training_df

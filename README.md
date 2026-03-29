@@ -10,15 +10,13 @@ This project fine-tunes LLaMA 3 7b for Cyber Threat Intelligence (CTI) and evalu
 3. **Evaluation:** Test with CTIBench.
 4. **Analysis:** Review model performance.
 
-
-
 ## Setup
 
 1. **Clone & Install:**
 
     ```bash
-    git clone https://github.com/FaroukDaboussi0/Fine-Tuning-LLMs-for-Cyber-Threat-Intelligence.git
-    cd CTI_expert
+    git clone https://github.com/davidvhk/Fine-Tuning-LLMs-for-Cyber-Threat-Intelligence.git
+    cd Fine-Tuning-LLMs-for-Cyber-Threat-Intelligence
     ```
 
 2. **Install Dependencies:**
@@ -29,10 +27,10 @@ This project fine-tunes LLaMA 3 7b for Cyber Threat Intelligence (CTI) and evalu
 
 3. **Set Up Environment Variables:**
 
-    - **Google API Token:** Export your Google API token using the following command:
+    - **NVD API Key:** Export your National Vulnerability Database API key (get one [here](https://nvd.nist.gov/developers/request-an-api-key)):
 
       ```bash
-      export GOOGLE_API_KEY='your_google_api_token'
+      export NVD_API_KEY='your_nvd_api_token'
       ```
 
     - **Hugging Face Token:** Export your Hugging Face token using the following command:
@@ -40,7 +38,6 @@ This project fine-tunes LLaMA 3 7b for Cyber Threat Intelligence (CTI) and evalu
       ```bash
       export HUGGINGFACE_TOKEN='your_huggingface_token'
       ```
-
 
 ## Usage:
 To generate text using the LLaMA 7B model fine-tuned for CTI tasks, use the following code:

@@ -1,154 +1,79 @@
 import csv
 import random
+import pandas as pd
+import json
+import os
 
-def take_random_rows(input_csv, output_csv, num_rows):
+def take_random_rows(input_csv, num_rows, output_csv=None):
     """
-    Take a specified number of random rows from an input CSV file and save them to an output CSV file.
+    Take a specified number of random rows from an input CSV file and return them as a DataFrame.
+    Optionally saves the selected rows to an output CSV file.
 
     Parameters:
     - input_csv (str): The path to the input CSV file.
-    - output_csv (str): The path to the output CSV file.
-    - num_rows (int): The number of random rows to select. Default is 200.
+    - num_rows (int): The number of random rows to select.
+    - output_csv (str): Optional path to save the selected rows.
 
     Returns:
-    - None
+    - pd.DataFrame: The selected random rows.
     """
-    # Read the input CSV file
-    with open(input_csv, 'r', encoding='utf-8') as infile:
-        reader = csv.reader(infile)
-        rows = list(reader)
-    
-    # Check if the number of rows is less than the required number
-    if len(rows) <= num_rows:
-        print(f"Input file has only {len(rows)} rows, which is less than or equal to the requested {num_rows} rows.")
-        return
-    
-    # Separate header and data rows
-    header, data = rows[0], rows[1:]
-    
-    # Take random rows
-    selected_rows = random.sample(data, num_rows)
-    
-    # Write the selected rows to the output CSV file
-    with open(output_csv, 'w', newline='', encoding='utf-8') as outfile:
-        writer = csv.writer(outfile)
-        writer.writerow(header)  # Write the header
-        writer.writerows(selected_rows)  # Write the selected rows
+    if not os.path.exists(input_csv):
+        print(f"Error: {input_csv} does not exist.")
+        return pd.DataFrame()
 
-import json
-import csv
+    df = pd.read_csv(input_csv)
+    
+    if len(df) <= num_rows:
+        print(f"Input file has only {len(df)} rows, which is less than or equal to the requested {num_rows} rows.")
+        selected_df = df
+    else:
+        selected_df = df.sample(n=num_rows, random_state=42)
+
+    if output_csv:
+        os.makedirs(os.path.dirname(output_csv), exist_ok=True)
+        selected_df.to_csv(output_csv, index=False)
+        print(f"Saved {len(selected_df)} random rows to {output_csv}")
+
+    return selected_df
 
 def sanitize_tsv_value(value):
-    # Example sanitization function
-    return value.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
+    if isinstance(value, str):
+        # Replace tabs with spaces
+        value = value.replace('\t', ' ')
+        # Replace newlines with spaces
+        value = value.replace('\n', ' ').replace('\r', ' ')
+    return value
 
 def qcm_json_to_tsv(json_file_path, tsv_filename):
+    if not os.path.exists(json_file_path):
+        print(f"Error: {json_file_path} not found.")
+        return
+
     with open(json_file_path, 'r', encoding='utf-8') as file:
-        data = json.load(file)
-    
+        try:
+            data = json.load(file)
+        except json.JSONDecodeError:
+            print(f"Error: {json_file_path} is not a valid JSON file.")
+            return
+
     with open(tsv_filename, 'w', newline='', encoding='utf-8') as tsv_file:
         writer = csv.writer(tsv_file, delimiter='\t')
         # Write header row
         writer.writerow(['Reference', 'Question', 'Option A', 'Option B', 'Option C', 'Option D', 'Prompt', 'GT', 'Explanation'])
-        
+
         for obj in data:
-            reference = sanitize_tsv_value(obj.get('Reference', ''))
+            # Basic mapping, might need adjustment based on Gemini's exact output format
+            ref = obj.get('CVE_ID', obj.get('CWE_ID', obj.get('CAPEC_ID', 'N/A')))
             question = sanitize_tsv_value(obj.get('Question', ''))
-            option_a = sanitize_tsv_value(obj.get('Option A', ''))
-            option_b = sanitize_tsv_value(obj.get('Option B', ''))
-            option_c = sanitize_tsv_value(obj.get('Option C', ''))
-            option_d = sanitize_tsv_value(obj.get('Option D', ''))
-            correct_answer = sanitize_tsv_value(obj.get('Correct Answer', ''))
+            options = obj.get('Options', {})
+            opt_a = sanitize_tsv_value(options.get('A', ''))
+            opt_b = sanitize_tsv_value(options.get('B', ''))
+            opt_c = sanitize_tsv_value(options.get('C', ''))
+            opt_d = sanitize_tsv_value(options.get('D', ''))
+            correct = obj.get('Correct Answer', '')
             explanation = sanitize_tsv_value(obj.get('Explanation', ''))
-
-            # Normalize the correct answer
-            correct_answer_lower = correct_answer.lower()
-            if correct_answer_lower in [option_a.lower(), 'option a']:
-                correct_answer = 'A'
-            elif correct_answer_lower in [option_b.lower(), 'option b']:
-                correct_answer = 'B'
-            elif correct_answer_lower in [option_c.lower(), 'option c']:
-                correct_answer = 'C'
-            elif correct_answer_lower in [option_d.lower(), 'option d']:
-                correct_answer = 'D'
-
-            prompt = f"You are given a multiple-choice question (MCQ) from a Cyber Threat Intelligence (CTI) knowledge benchmark dataset. Your task is to choose the best option among the four provided. Return your answer as a single uppercase letter: A, B, C, or D.  **Question:** {question} ? **Options:** A) {option_a} B) {option_b} C) {option_c} D) {option_d} **Important:** The last line of your answer should contain only the single letter corresponding to the best option, with no additional text. "
-
             
-            writer.writerow([reference, question, option_a, option_b, option_c, option_d, prompt, correct_answer, explanation])
-
-
-def validate_tsv_format(tsv_filename):
-    try:
-        with open(tsv_filename, 'r', encoding='utf-8') as tsv_file:
-            reader = csv.reader(tsv_file, delimiter='\t')
+            prompt = f"Question: {question}\nA) {opt_a}\nB) {opt_b}\nC) {opt_c}\nD) {opt_d}\nAnswer:"
             
-            # Read header
-            header = next(reader)
-            expected_columns = ['Reference', 'Question', 'Option A', 'Option B', 'Option C', 'Option D', 'Prompt', 'GT', 'Explanation']
-            
-            if header != expected_columns:
-                print(f"Header mismatch: Expected {expected_columns}, found {header}")
-                return False
-
-            # Check each row
-            for i, row in enumerate(reader, start=2):  # Start at row 2 to account for header
-                if len(row) != len(expected_columns):
-                    print(f"Row {i} column count mismatch: Expected {len(expected_columns)}, found {len(row)}")
-                    return False
-                
-                # Example check: Ensure each field is a string (you can add more type checks as needed)
-                for value in row:
-                    if not isinstance(value, str):
-                        print(f"Row {i} value type mismatch: Expected string, found {type(value).__name__}")
-                        return False
-            
-        print("TSV format is valid.")
-        return True
-    
-    except Exception as e:
-        print(f"Error reading TSV file: {e}")
-        return False
-
-
-
-def remove_rows_with_missing_values(input_tsv_filename, output_tsv_filename):
-    header = None
-    rows_to_keep = []
-    
-    try:
-        # Read the TSV file
-        with open(input_tsv_filename, 'r', encoding='utf-8') as infile:
-            reader = csv.reader(infile, delimiter='\t')
-            
-            # Read header
-            header = next(reader)
-            expected_columns = ['Reference', 'Question', 'Option A', 'Option B', 'Option C', 'Option D', 'Prompt', 'GT', 'Explanation']
-            
-            if header != expected_columns:
-                print(f"Header mismatch: Expected {expected_columns}, found {header}")
-                return
-            
-            # Check each row
-            for row in reader:
-                if len(row) != len(expected_columns):
-                    print(f"Row column count mismatch: Expected {len(expected_columns)}, found {len(row)}")
-                    continue
-                
-                # Check if any value is missing
-                if not any(not value.strip() for value in row):
-                    rows_to_keep.append(row)
-        
-        # Write the cleaned data to a new TSV file
-        with open(output_tsv_filename, 'w', newline='', encoding='utf-8') as outfile:
-            writer = csv.writer(outfile, delimiter='\t')
-            writer.writerow(header)
-            writer.writerows(rows_to_keep)
-        
-        print(f"Rows with missing values have been removed. Cleaned data saved to {output_tsv_filename}")
-    
-    except Exception as e:
-        print(f"Error processing TSV file: {e}")
-
-# Example usage
-
+            writer.writerow([ref, question, opt_a, opt_b, opt_c, opt_d, prompt, correct, explanation])
+    print(f"Converted {len(data)} JSON MCQs to {tsv_filename}")
