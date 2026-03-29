@@ -1,29 +1,22 @@
 #!/usr/bin/env python
 # coding: utf-8
+#
+# --- 1. Introduction ---
+#
+# 1.1. Background
 
-# # CTI Expert: Fine-Tuning LLMs for Cyber Threat Intelligence Notebook
-# 
-
-# 🛠️ Customize and Fine-Tune the Model[ Here](#4-model-fine-tuning)
-# 
-# 
-# 📈 [CTIBench](CTIBench%20Paper.pdf): A Benchmark for Evaluating LLMs in Cyber Threat Intelligence
-# 
-# 
-
-# ## 1. Introduction
-
-# 
-# 
-# ### 1.1. Background
 # In today's world, cybersecurity is more important than ever. Organizations face constant cyber threats, and Cyber Threat Intelligence (CTI) helps them understand and respond to these threats. CTI provides crucial information that allows companies to protect their critical systems.
 # 
 # Large Language Models (LLMs), like GPT-3 and LLaMA, have shown promise in analyzing large amounts of text. These models can assist with various CTI tasks, such as detecting threats and analyzing vulnerabilities. However, LLMs often struggle with specialized tasks like CTI, where accuracy is crucial. Sometimes, they produce incorrect or misleading information, which is especially dangerous in cybersecurity.
 # 
-# ### 1.2. Problem Statement
+
+# 1.2. Problem Statement
+
 # Although LLMs are good at general text processing, they need specialized benchmarks to see how well they perform in CTI tasks. Current benchmarks don’t fully capture the unique challenges of cybersecurity, such as the need for high accuracy and relevance. Without these benchmarks, it's hard to know how useful LLMs are in real-world cybersecurity scenarios.
 # 
-# ### 1.3. Project Overview
+
+# 1.3. Project Overview
+
 # This project aims to fine-tune a pre-trained LLM using CTI-specific data and evaluate its performance with **CTIBench**, a benchmark designed for cybersecurity tasks. CTIBench helps assess how well the model performs on tasks like identifying threat actors, mapping attack techniques, and correlating vulnerabilities. The project involves these steps:
 # 1. **Data Collection:** Gathering CTI data from reliable sources.
 # 2. **Data Preparation:** Cleaning and organizing the data for effective model training.
@@ -31,30 +24,28 @@
 # 4. **Benchmark Evaluation:** Using CTIBench to thoroughly test the fine-tuned model's performance.
 # 5. **Analysis and Insights:** Examining the results to identify where the model excels and where it can improve, with a focus on its real-world application in cybersecurity.
 # 
-# ### 1.4. Objectives
+
+# 1.4. Objectives
+
 # The main goals of this project are:
 # - To create a high-quality CTI dataset for fine-tuning LLMs.
 # - To fine-tune an LLM specifically for CTI tasks.
 # - To evaluate the model’s performance using CTIBench, ensuring it meets the high standards required in cybersecurity.
 # - To provide insights into how well LLMs work in CTI, highlighting their strengths and weaknesses.
 # - To advance AI tools in cybersecurity by offering suggestions for future research and development.
-# 
-# 
-# ### 1.5. Significance
+#
+# 1.5. Significance
+
 # By fine-tuning LLMs with CTI data and evaluating them with CTIBench, this project aims to improve the accuracy and reliability of AI tools in cybersecurity. The results will help create better CTI applications, allowing organizations to more effectively predict, identify, and respond to cyber threats. This project also contributes to AI research by providing a specialized evaluation framework that could be used in other fields as well.
 # 
 
-# ## 2. Data Collection
-# 
-# 
-
+# --- 2. Data Collection ---
+#
 # The data collection phase is critical for building a robust and comprehensive dataset to fine-tune the Large Language Model (LLM) for Cyber Threat Intelligence (CTI). This project involves collecting data from multiple authoritative sources related to cybersecurity threats, vulnerabilities, and attack techniques.
 # 
 
-# ### 2.1. CVE Data
-
-# 
-# 
+# 2.1. CVE Data
+#
 # **Source**: [National Vulnerability Database (NVD)](https://nvd.nist.gov)
 # 
 # **Description**: The Common Vulnerabilities and Exposures (CVE) system provides a reference-method for publicly known information-security vulnerabilities and exposures. CVE data is crucial for understanding vulnerabilities that could be exploited in cyber-attacks.
@@ -68,16 +59,14 @@
 # - **Hyperlinks**: Links to additional information or references about the vulnerability.
 # 
 
-# #### 2.1.1 Scraping Technique
+# 2.1.1 Scraping Technique
+
 # - **Tools**: `requests`, `BeautifulSoup`
 # - **Process**:
 #   1. Send HTTP requests to the CWE website using the `requests` library.
 #   2. Use `BeautifulSoup` to parse and extract the relevant data from the HTML content.
 #   3. Organize the extracted data into the specified columns.
 #   4. Store the data in a CSV file
-
-# In[ ]:
-
 
 from Scrap.CVE_scrap.scrap_cve_data import scrap_cve_data_from_links
 from Scrap.CVE_scrap.scrape_cve_links import scrape_all_cve_links
@@ -143,14 +132,9 @@ else:
 output_cve_data="Data/collected_data/cve_data.csv"
 scrap_cve_data_from_links(cve_links_file, output_cve_data, api_key=NVD_API_KEY, overwrite=REFRESH_DATA)
 
+# 2.1.2 Summarize data scraped
 
-
-# #### 2.1.2 Summarize data scraped
-
-# ##### 2.1.2.1 Row exemple 
-
-# In[43]:
-
+# 2.1.2.1 Row exemple
 
 import pandas as pd
 
@@ -160,11 +144,7 @@ df = df.iloc[:, 1:]
 html_table = df.head(1).to_html(index=False)
 display(HTML(html_table))
 
-
-# ##### 2.1.2.2 Stats  
-
-# In[18]:
-
+# 2.1.2.2 Stats
 
 import pandas as pd
 
@@ -193,11 +173,7 @@ html_metrics_table = tabulate(metrics_table, headers=['Metric', 'Detail', 'Value
 # Display the table
 display(HTML(html_metrics_table))
 
-
-# ##### 2.1.2.3 Distribution of CVEs Over Time
-
-# In[14]:
-
+# 2.1.2.3 Distribution of CVEs Over Time
 
 # Plot distribution of CVE publications over time
 plt.figure(figsize=(12, 6))
@@ -210,31 +186,30 @@ plt.grid(axis='y', linestyle='--', alpha=0.7)
 plt.tight_layout()
 plt.show()
 
+# 2.2. CWE Data
+#
+# 2.2.1. Description
 
-# ### 2.2. CWE Data 
-
-# 
-# 
-# #### 2.2.1. Description
 # The Common Weakness Enumeration (CWE) dataset provides a list of software weaknesses that can lead to vulnerabilities. The dataset includes the following columns:
 # - **ID**: The unique identifier for the weakness.
 # - **Description**: A brief description of the weakness.
 # - **Extended Description**: A detailed description providing more context about the weakness.
 # - **References**: External references or resources related to the weakness.
 # 
-# #### 2.2.2. Data Source
+
+# 2.2.2. Data Source
+
 # - **Source**: [CWE - MITRE](https://cwe.mitre.org)
 # 
-# #### 2.2.3. Scraping Technique
+
+# 2.2.3. Scraping Technique
+
 # - **Tools**: `requests`, `BeautifulSoup`
 # - **Process**:
 #   1. Send HTTP requests to the CWE website using the `requests` library.
 #   2. Use `BeautifulSoup` to parse and extract the relevant data from the HTML content.
 #   3. Organize the extracted data into the specified columns.
 #   4. Store the data in a CSV file or database.
-
-# In[ ]:
-
 
 from Scrap.CWE_scrap.scarape_cwe import scrap_cwe
 
@@ -246,13 +221,9 @@ scrap_cwe(id_list_filename=id_list_filename, output_file=cwe_output_file, overwr
 import pandas as pd
 cwe_data = pd.read_csv(cwe_output_file)
 
+# 2.2.2 Summarize data scraped
 
-# #### 2.2.2 Summarize data scraped
-
-# ##### 2.2.2.1 Row exemple 
-
-# In[4]:
-
+# 2.2.2.1 Row exemple
 
 import pandas as pd
 
@@ -260,16 +231,11 @@ cwe_data = pd.read_csv("Data/collected_data/cwe_data.csv")
 
 cwe_data["ID"] = cwe_data["ID"].apply(lambda x: f"CWE-{x}")
 
-
 html_table = cwe_data.head(1).to_html(index=False)
 
 display(HTML(html_table))
 
-
-# ##### 2.2.2.2 Stats  
-
-# In[39]:
-
+# 2.2.2.2 Stats
 
 import pandas as pd
 
@@ -285,12 +251,10 @@ html_table = tabulate(table_data, headers=['Metric', 'Value'], tablefmt='html', 
 # Display the HTML table
 display(HTML(html_table))
 
+# 2.3. Attack Patterns (Techniques)
+#
+# 2.3.1. Description
 
-# ### 2.3. Attack Patterns (Techniques) 
-
-# 
-# 
-# #### 2.3.1. Description
 # The dataset for attack patterns, also known as techniques, includes detailed information on how adversaries carry out attacks. The dataset includes the following fields:
 # - **ID**: The unique identifier for the technique.
 # - **Technique Name**: The name of the technique.
@@ -305,10 +269,14 @@ display(HTML(html_table))
 # - **Related Campaigns**: A list of Campaigns, each containing `ID`, `Campaign Name`, and `comment`.
 # - **Mitigations**: A list of Mitigations, each containing `ID`, `Course of Action Name`, `Description`, and `comment`.
 # 
-# #### 2.3.2. Data Source
+
+# 2.3.2. Data Source
+
 # - **Source**: [MITRE ATT&CK](https://attack.mitre.org)
 # 
-# #### 2.3.3. Scraping Technique
+
+# 2.3.3. Scraping Technique
+
 # - **Tools**: `requests`, `BeautifulSoup`, `Selenium`
 # - **Process**:
 #   1. Send HTTP requests using the `requests` library to retrieve the web pages from the ATT&CK framework.
@@ -316,15 +284,10 @@ display(HTML(html_table))
 #   3. Parse the data into the defined fields, handling nested structures for related malwares, tools, intrusion sets, campaigns, and mitigations.
 #   4. Save the structured data in a suitable format, such as JSON or a database.
 
-# In[ ]:
-
-
 from Scrap.Techniques_scrap.techniques_scrap import extract_techniques_base_data, populate_attack_patterns_with_scrapped_data, scrap_data_related_to_techniques
-
 
 stix_data_path = 'Data/STIX_enterprise_attack.json'
 techniques_base_data = extract_techniques_base_data(stix_data_path)
-
 
 attack_patterns, intrusion_sets, campaigns , malwares , tools , course_of_actions =  scrap_data_related_to_techniques(techniques_base_data)
 
@@ -335,13 +298,9 @@ full_attack_patterns_path = 'Data/collected_data/Full_attack_patterns_data.json'
 with open(full_attack_patterns_path, 'w', encoding='utf-8') as f:
     json.dump(attack_patterns, f, indent=4)
 
+# 2.3.4 Summarize data scraped
 
-# #### 2.3.4 Summarize data scraped
-
-# #### 2.3.4.1 Stats
-
-# In[55]:
-
+# 2.3.4.1 Stats
 
 import json
 import pandas as pd
@@ -364,12 +323,9 @@ html_table = tabulate(table_data, headers=['Metric', 'Value'], tablefmt='html', 
 # Display the HTML table
 display(HTML(html_table))
 
+# 2.3.4.2 Exemple of technique data scrapped
 
-# #### 2.3.4.2 Exemple of technique data scrapped
 # 
-
-# In[56]:
-
 
 def format_json(data, indent=4):
     """Format JSON data with indentation and syntax highlighting"""
@@ -385,12 +341,10 @@ formatted_json = format_json(first_object)
 print("exemple of technique data scrapped :")
 display(HTML(formatted_json))
 
+# 2.4. CAPEC Data
+#
+# 2.4.1. Description
 
-# ### 2.4. CAPEC Data 
-# 
-
-# 
-# #### 2.4.1. Description
 # The Common Attack Pattern Enumeration and Classification (CAPEC) dataset categorizes attack patterns to help understand the nature of attacks. The dataset includes the following columns:
 # - **ID**: The unique identifier for the attack pattern.
 # - **Name**: The name of the attack pattern.
@@ -413,19 +367,20 @@ display(HTML(formatted_json))
 # - **Taxonomy Mappings**: How the attack pattern maps to other taxonomies.
 # - **Notes**: Additional notes.
 # 
-# #### 2.4.2. Data Source
+
+# 2.4.2. Data Source
+
 # - **Source**: [CAPEC - MITRE](https://capec.mitre.org)
 # 
-# #### 2.4.3. Scraping Technique
+
+# 2.4.3. Scraping Technique
+
 # - **Tools**: Direct download in CSV format from the official website.
 # - **Process**:
 #   1. Access the CAPEC website and download the CSV file containing the attack pattern data.
 #   2. Load the CSV file into a data processing environment (e.g., Pandas in Python).
 #   3. Perform any necessary data cleaning or restructuring to ensure consistency with the other datasets.
 #   4. Store the processed data for further use in model fine-tuning.
-
-# In[2]:
-
 
 import pandas as pd
 from Scrap.QCM_generating.download_capec import download_capec_csv
@@ -434,22 +389,14 @@ capec_path = "Data/collected_data/CAPEC.csv"
 download_capec_csv(capec_path)
 capec = pd.read_csv(capec_path)
 
+# 2.4.4 Summarize data scraped
 
-# #### 2.4.4 Summarize data scraped
-
-# #### 2.3.4.1 Row exemple 
-
-# In[5]:
-
+# 2.3.4.1 Row exemple
 
 html_table = capec.head(1).to_html(index=False)
 display(HTML(html_table))
 
-
-# #### 2.3.4.2 Stats
-
-# In[7]:
-
+# 2.3.4.2 Stats
 
 import pandas as pd
 
@@ -465,23 +412,21 @@ html_table = tabulate(table_data, headers=['Metric', 'Value'], tablefmt='html', 
 # Display the HTML table
 display(HTML(html_table))
 
+# 2.5. Reports Data
+#
+# 2.5.1. Description
 
-# ### 2.5. Reports Data 
-
-# 
-# 
-# #### 2.5.1. Description
 # The reports dataset contains detailed threat or attack reports that explain the techniques used and Indicators of Compromise (IOCs) associated with specific cyber incidents. In these reports, the name of the group actor responsible for the attack is anonymized and replaced with a placeholder `[PLACEHOLDER]`. The dataset includes the following columns:
 # - **Report**: The full text of the report, with the actor's name hidden by `[PLACEHOLDER]`.
 # - **Group Actor Name**: The name of the group responsible for the attack, which will be used to replace the placeholder.
 # 
-# #### 2.5.2. Data Source
-# - **Source**: Various cybersecurity websites, blogs, and reports from reputable cybersecurity firms and organizations.
-# 
-# 
-# 
 
-# #### 2.5.3. Scraping Technique
+# 2.5.2. Data Source
+
+# - **Source**: Various cybersecurity websites, blogs, and reports from reputable cybersecurity firms and organizations.
+#
+# 2.5.3. Scraping Technique
+
 # - **Tools**: `Selenium`, `Google Genimi`
 # - **Process**:
 #   1. **Get List of Actors**: Extract a list of attackers (cyber threat actors) registered in MITRE ATT&CK to use as a reference for identifying relevant reports.
@@ -493,13 +438,9 @@ display(HTML(html_table))
 #      - Should provide hints or insights related to the actor responsible for the attack.
 #   5. **Store the Data**: Save the validated reports and corresponding actor names in a structured format, such as CSV or JSON, with two columns: `Report` and `Group Actor Name`.
 
-# In[ ]:
-
-
 from Scrap.Reports_scraper.deep_validation import deep_validation
 from Scrap.Reports_scraper.reports_validation import scrap_reports
 from Scrap.Reports_scraper.scrap_reports_links import get_existing_groups, scrap_reports_links
-
 
 intrusion_sets=r'Data/intrusion_sets.json'
 # Ensure directory exists
@@ -540,7 +481,6 @@ scrap_reports_links(exicting_groups,output_reports_links_csv, force_refresh=REFR
 output_reports_data_tsv = r'Data/logs/reports_data_tsv'
 scrap_reports(output_reports_links_csv,output_reports_data_tsv)
 
-
 final_reports = r"Data/collected_data/rapports_data.csv"
 
 if VALIDATE_REPORTS:
@@ -555,29 +495,16 @@ else:
     df_temp.to_csv(final_reports, sep="\t", index=False)
     print(f"Directly saved {len(df_temp)} reports to {final_reports}")
 
-
-# #### 2.5.4. Summarize data scraped
-
-# In[13]:
-
+# 2.5.4. Summarize data scraped
 
 reports = pd.read_csv(final_reports, sep="\t")
 
-
-# ##### 2.5.4.1 Row exemple
-
-# In[15]:
-
+# 2.5.4.1 Row exemple
 
 html_table = reports.tail(1).to_html(index=False)
 display(HTML(html_table))
 
-
-# ##### 2.5.4.1 Stats
-
-# In[17]:
-
-
+# 2.5.4.1 Stats
 
 num_objects = len(reports)
 # Prepare the data for tabulate
@@ -589,15 +516,15 @@ html_table = tabulate(table_data, headers=['Metric', 'Value'], tablefmt='html', 
 # Display the HTML table
 display(HTML(html_table))
 
+# 2.6. MCQ Data Collection and Generation
+#
+# 2.6.1. Description
 
-# ### 2.6. MCQ Data Collection and Generation
-
-# 
-# 
-# #### 2.6.1. Description
 # This section focuses on generating multiple-choice questions (MCQs) from various cyber threat intelligence datasets, including attack patterns, CWE, CVE, and CAPEC.
 # 
-# #### 2.6.2. MCQ Fields
+
+# 2.6.2. MCQ Fields
+
 # Each MCQ will consist of the following fields:
 # - **Reference**: The source or dataset from which the MCQ was derived (e.g., Attack Patterns, CWE, CVE, CAPEC) ids.
 # - **Question**: The question to be answered.
@@ -608,17 +535,16 @@ display(HTML(html_table))
 # - **Correct Answer**: The correct option among A, B, C, or D.
 # - **Explanation**: An explanation of why the answer is correct.
 # 
-# #### 2.6.3. Data Sources
+
+# 2.6.3. Data Sources
+
 # - **Attack Patterns**: [MITRE ATT&CK](https://attack.mitre.org)
 # - **CWE**: [CWE - MITRE](https://cwe.mitre.org)
 # - **CVE**: [NVD - National Vulnerability Database](https://nvd.nist.gov)
 # - **CAPEC**: [CAPEC - MITRE](https://capec.mitre.org)
-# 
-# 
-# 
-# 
+#
+# 2.6.4. Generating MCQs
 
-# #### 2.6.4. Generating MCQs
 # - **Tools**: `Google Genimi`
 # - **Process**:
 #   1. **Extract Data**: Use the previously collected and processed data from Attack Patterns, CWE, CVE, and CAPEC datasets.
@@ -635,11 +561,7 @@ display(HTML(html_table))
 #   4. **Review and Validate**: Ensure that the generated MCQs are accurate, relevant, and correctly formatted.
 #   5. **Store the Data**: Save the MCQs in a structured format, such as CSV or JSON, with fields for Reference, Question, Options, Correct Answer, and Explanation.
 
-# In[ ]:
-
-
 from Scrap.QCM_generating.data_processing import take_random_rows
-
 
 cve_data_csv = 'Data/collected_data/cve_data.csv'
 CAPEC_data_csv = 'Data/collected_data/CAPEC.csv'
@@ -650,15 +572,10 @@ CAPEC_data = pd.read_csv(CAPEC_data_csv)
 cve_data = take_random_rows(cve_data_csv,3000)
 attack_patterns_data = attack_patterns
 
-
-# In[ ]:
-
-
 from Scrap.QCM_generating.generate_capec_related import generate_capec_qcm
 from Scrap.QCM_generating.generate_cve_related import generate_cves_qcm
 from Scrap.QCM_generating.generate_cwe_related import generate_cwes_qcm
 from Scrap.QCM_generating.generate_techniques_related import generate_techniques_qcm
-
 
 if GENERATE_QCMS:
     print("Generating MCQs using Ollama...")
@@ -750,17 +667,19 @@ else:
     print("Skipping MCQ generation, balancing and summary (GENERATE_QCMS=False).")
     cwes_qcms, cves_qcms, CAPEC_qcms, techniques_qcms = [], [], [], []
 
+# --- 3. Data Preparation ---
+#
+# 3.1. Overview
 
-# ## 3. Data Preparation
-
-# 
-# 
-# ### 3.1. Overview
 # In this phase, the collected data is prepared for evaluation based on the CTIBench benchmark. The data is organized into four distinct tasks: generating multiple-choice questions (MCQs), identifying related Common Weakness Enumerations (CWEs), associating reports with related actors, and linking descriptions to CVSS scores.
 # 
-# ### 3.2. Data Preparation Tasks
+
+# 3.2. Data Preparation Tasks
+
 # 
-# #### 3.2.1. CTI_MCQs
+
+# 3.2.1. CTI_MCQs
+
 # - **Description**: Prepare data for generating multiple-choice questions related to cyber threat intelligence.
 # - **Fields**:
 #   - **Reference**: Source of the information used to create the MCQ (e.g., Attack Patterns, CWE, CVE, CAPEC).
@@ -775,7 +694,9 @@ else:
 #   1. **Format Data**: Ensure each MCQ is formatted with all required fields.
 #   2. **Verify Accuracy**: Confirm that the correct answers are accurately labeled.
 # 
-# #### 3.2.2. CTI_RCM (Related CWE Mapping)
+
+# 3.2.2. CTI_RCM (Related CWE Mapping)
+
 # - **Description**: Map descriptions to related Common Weakness Enumerations (CWEs).
 # - **Fields**:
 #   - **Description**: The description of the cyber threat or vulnerability.
@@ -785,7 +706,9 @@ else:
 #   1. **Match Descriptions**: Identify and associate descriptions with corresponding CWEs.
 #   2. **Validate Mapping**: Ensure that the ground truth CWEs accurately reflect the descriptions.
 # 
-# #### 3.2.3. CTI_TTA (Threat Actor Mapping)
+
+# 3.2.3. CTI_TTA (Threat Actor Mapping)
+
 # - **Description**: Link threat reports to the related actors responsible for the attacks.
 # - **Fields**:
 #   - **Report**: The full text of the threat or attack report.
@@ -796,7 +719,9 @@ else:
 #   2. **Map Actors**: Associate each report with the correct threat actor.
 #   3. **Verify Accuracy**: Ensure that the ground truth actors are correctly identified.
 # 
-# #### 3.2.4. CTI_VSP (Vulnerability Severity Prediction)
+
+# 3.2.4. CTI_VSP (Vulnerability Severity Prediction)
+
 # - **Description**: Link descriptions to CVSS (Common Vulnerability Scoring System) scores.
 # - **Fields**:
 #   - **Description**: The description of the vulnerability.
@@ -807,19 +732,14 @@ else:
 #   2. **Validate Scores**: Confirm that the ground truth CVSS scores accurately reflect the descriptions.
 # 
 
-# In[ ]:
-
-
 from Data_preparation.cti_mcq import preper_cti_mcq_to_train
 from Data_preparation.cti_rcm import preper_cti_rcm_to_train
 from Data_preparation.cti_tta import preper_cti_tta_to_train
 from Data_preparation.cti_vsp import preper_cti_vsp_to_train
 
-
 cve_data = "Data/collected_data/cve_data.csv"
 qcm_data = "Data/logs/MCQs_augmented.csv"
 reports_data = "Data/collected_data/rapports_data.csv"
-
 
 cti_rcm = "Data/finetuning_data/cti-rcm.csv"
 cti_vsp = "Data/finetuning_data/cti-vsp.csv"
@@ -846,14 +766,9 @@ try:
 except Exception as e:
     print(f"Skipping CTI TTA prep: {e}")
 
+# 3.3. **Data visualisation**
 
-
-# ### 3.3. **Data visualisation**
-
-# ##### 3.3.1 cti data distribution per type
-
-# In[45]:
-
+# 3.3.1 cti data distribution per type
 
 import pandas as pd
 
@@ -892,11 +807,7 @@ if file_names:
     plt.tight_layout()
     plt.show()
 
-
-# ### 3.4. **Data Augmentation**
-
-# In[ ]:
-
+# 3.4. **Data Augmentation**
 
 if GENERATE_QCMS:
     from Data_preparation.Data_augmentation import balance_train_data
@@ -906,9 +817,6 @@ if GENERATE_QCMS:
         print(f"Skipping training data balancing: {e}")
 else:
     print("Skipping training data balancing (GENERATE_QCMS=False).")
-
-# In[7]:
-
 
 import pandas as pd
 
@@ -951,14 +859,9 @@ if file_names:
 plt.tight_layout()
 plt.show()
 
-
-# ### 3.4. **Training Data** Preprocess 
-
-# In[9]:
-
+# 3.4. **Training Data** Preprocess
 
 from Data_preparation.preproces_cti_data_to_llm import preprocess_cti_data_to_llm
-
 
 if GENERATE_QCMS:
     cti_rcm_prep = fr"Data/finetuning_data/balanced_data/cti_rcm.csv"
@@ -977,13 +880,9 @@ try:
 except Exception as e:
     print(f"Skipping final training data preprocessing: {e}")
 
+# 3.5. **Training Data** Discovering
 
-# ### 3.5. **Training Data** Discovering
-
-# ##### 3.5.1 Exemple Rows
-
-# In[13]:
-
+# 3.5.1 Exemple Rows
 
 import pandas as pd
 import random
@@ -999,11 +898,7 @@ random_rows = training_data.sample(n=3)
 # Adjust the max-height to control the scroll area
 display(HTML(random_rows.to_html(classes='table table-striped', index=False)))
 
-
-# ##### 3.5.2 Number of Simples in Training Data
-
-# In[11]:
-
+# 3.5.2 Number of Simples in Training Data
 
 import pandas as pd
 
@@ -1021,29 +916,23 @@ plt.xlabel('Number of Observations')
 plt.title('Total Number of Observations in Training Data')
 plt.show()
 
+# --- 4. Model Fine-Tuning ---
 
-# ## 4. Model Fine-Tuning
+# 4.1. Overview
 
-# ### 4.1. Overview
 # This section outlines the process of fine-tuning a pre-trained Large Language Model (LLM) for Cyber Threat Intelligence (CTI) tasks. It includes model configuration, quantization, adding adapters (LoRA), and training setup.
 # 
-
-# In[ ]:
-
 
 import os
 import huggingface_hub
 
 huggingface_hub.login(token=os.environ.get('HUGGINGFACE_TOKEN'))
 
+# 4.2. Data Preparation
 
-# ### 4.2. Data Preparation
 # - **Loading the Data:** Reads the CTI training data from a CSV file.
 # - **Splitting the Data:** Splits the dataset into training and validation sets using a 90/10 split.
 # - **Creating Datasets:** Converts the split data into the `Dataset` format required for training.
-
-# In[ ]:
-
 
 from datasets import Dataset
 from sklearn.model_selection import train_test_split
@@ -1057,8 +946,7 @@ train_set, validation_set = train_test_split(cti_train, test_size=0.1, random_st
 train_dataset = Dataset.from_pandas(train_set)
 validation_dataset = Dataset.from_pandas(validation_set)
 
-
-# ### 4.3. Model Configuration
+# 4.3. Model Configuration
 
 # 
 # - **Loading the Model:**
@@ -1072,9 +960,6 @@ validation_dataset = Dataset.from_pandas(validation_set)
 # - **Configuring LoRA:**
 #   - **Purpose:** Adapts the model with low-rank matrices for efficient training.
 #   - **Configuration:** Sets LoRA with a rank of 8 for specific model modules and integrates it to enhance the model's performance.
-
-# In[ ]:
-
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
@@ -1106,8 +991,7 @@ lora_config = LoraConfig(
 
 model.add_adapter(lora_config)
 
-
-# ### 4.4. Training Setup
+# 4.4. Training Setup
 
 # - **Formatting Function:**
 #   - **Purpose:** Formats input data for training by combining the user input and target output into a structured format.
@@ -1131,17 +1015,12 @@ model.add_adapter(lora_config)
 #   - output_dir = `Models/llama-7b-qlora-CTI`
 # 
 
-# In[ ]:
-
-
 from trl import SFTTrainer
 from transformers import TrainingArguments
-
 
 def formatting_func(example):
     text = f"### USER: {example['input_text']}\n### ASSISTANT: {example['target_output']}"
     return text
-
 
 output_dir = "Models/llama-7b-qlora-CTI"
 per_device_train_batch_size = 4
@@ -1183,24 +1062,16 @@ trainer = SFTTrainer(
     formatting_func=formatting_func,
 )
 
-
-# ### 4.5. Training Execution
+# 4.5. Training Execution
 
 # - **Training Call:**
 #   - **Purpose:** Starts the training process using the previously configured `SFTTrainer`.
 #   - **Implementation:** Calls the `train()` method on the `SFTTrainer` instance to begin fine-tuning the model with the specified parameters and data.
 
-# In[ ]:
-
-
 trainer.train()
 
-
-# ## 5. Models Evaluation
-
-# 
-# 
-# 
+# --- 5. Models Evaluation ---
+#
 # Benchmark evaluation is essential for assessing model performance on CTI tasks. It involves comparing different models using standardized benchmarks to determine their effectiveness and suitability for real-world applications.
 # 
 # **Key Points:**
@@ -1216,9 +1087,6 @@ trainer.train()
 # The same Evaluation Technique used in cti-bench
 # 
 # The evaluation aims to compare these models' performance, highlighting their strengths and areas for improvement.
-
-# In[ ]:
-
 
 from model_evaluation.evaluation import evaluate_model
 
@@ -1246,14 +1114,9 @@ for model in models :
     
 df = pd.DataFrame(scores)
 
-
 df.to_csv(r'model_evaluation/scores.csv', index=False)
 
-
-# ### 5.1 Models Scores Comparisation
-
-# In[16]:
-
+# 5.1 Models Scores Comparisation
 
 import pandas as pd
 
@@ -1271,19 +1134,15 @@ sns.barplot(x='metric', y='score', hue='model', data=scores_melted)
 plt.title('Model Evaluation Scores by Metric')
 plt.show()
 
-
-
-# ### 5.2 Analysis and Insights
-
-# 
-# 
+# 5.2 Analysis and Insights
+#
 # The evaluation results highlight several key insights:
 # 
 # - Fine-Tuned Model vs. Base Model: The fine-tuned LLaMA model, adapted with CTI-specific data, shows better performance in all areas compared to the base model. This improvement suggests that fine-tuning with specialized data makes the model more effective for CTI tasks.
 # 
 # - Comparison with Gemini Model: When comparing the fine-tuned LLaMA model to Google's Gemini model, the performance is very similar. Although the Gemini model has more parameters and might be stronger in other areas, the fine-tuned LLaMA model holds up well for CTI tasks.
 
-# ## 6. Conclusion 
+# --- 6. Conclusion ---
 
 # 
 # - This project shows that fine-tuning a pre-trained LLaMA model with CTI data makes it better at handling cybersecurity tasks than the base model. The fine-tuned LLaMA model performs almost as well as the Google Gemini model, showing that each model has its own strengths.
